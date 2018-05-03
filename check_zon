@@ -3,6 +3,11 @@
 sbfdata=$(mktemp)
 iskradata=$(mktemp)
 
+AWK=/usr/bin/awk
+SED=/bin/sed
+GREP=/bin/grep
+BC=/usr/bin/bc
+
 X_OK=0
 X_WARN=1
 X_CRIT=2
@@ -15,7 +20,7 @@ PERFDATA="|"
 telnet sunnyboy 7776 > $sbfdata 2>/dev/null
 telnet rpi 7777 > $iskradata 2>/dev/null
 
-DEVSTATUS=$(awk '/Device Status/ {print $NF}' $sbfdata)
+DEVSTATUS=$($AWK '/Device Status/ {print $NF}' $sbfdata)
 
 if [ -n "$DEVSTATUS" ] && [ "$DEVSTATUS" = "Ok" ]
 then
@@ -25,17 +30,17 @@ else
 	EXITSTATUS=$X_CRIT
 fi
 
-DEVTEMP=$(awk '/Device Temperature/ {print $NF}' $sbfdata | sed 's/.C$//' )
+DEVTEMP=$($AWK '/Device Temperature/ {print $NF}' $sbfdata | $SED 's/.C$//' )
 
 PERFDATA="${PERFDATA}devtemp=$DEVTEMP "
 
-PRODTODAY=$(awk '/EToday/ {print $NF}' $sbfdata | sed 's/kWh$//' )
-PRODTOTAL=$(awk '/ETotal/ {print $NF}' $sbfdata | sed 's/kWh$//' )
-GRIDFREQ=$(awk '/Grid Freq/ {print $NF}' $sbfdata | sed 's/Hz$//' )
+PRODTODAY=$($AWK '/EToday/ {print $NF}' $sbfdata | $SED 's/kWh$//' )
+PRODTOTAL=$($AWK '/ETotal/ {print $NF}' $sbfdata | $SED 's/kWh$//' )
+GRIDFREQ=$($AWK '/Grid Freq/ {print $NF}' $sbfdata | $SED 's/Hz$//' )
 
 PERFDATA="${PERFDATA}etoday=$PRODTODAY gridfreq=$GRIDFREQ "
 
-if echo $GRIDFREQ |grep -q '^0\.00'
+if echo $GRIDFREQ |$GREP -q '^0\.00'
 then
 	MESSAGE="$MESSAGE OFFLINE"
 fi
@@ -45,7 +50,7 @@ MESSAGE="$MESSAGE EToday=$PRODTODAY"
 ### proces iskra data ###
 
 get_kwh_value () {
-	 grep --binary-files=text -F -- "$1" $iskradata |sed -e 's/[()]/ /g' -e 's/\*kWh//' -e 's/ 00*/ /'  |awk '{print $NF}'
+	 $GREP --binary-files=text -F -- "$1" $iskradata |sed -e 's/[()]/ /g' -e 's/\*kWh//' -e 's/ 00*/ /'  |$AWK '{print $NF}'
 }
 
 METER1=$(get_kwh_value '1-0:1.8.1')
@@ -87,8 +92,17 @@ then
 	exit $X_OK
 elif [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
 	source $NULSTANDFILE
+	# check values
+	if [ -z $etotal ] || [ -z $m1 ]
+	then
+		write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
+		echo "${MESSAGE}${PERFDATA}"
+		exit $X_UNKN
+	fi
+
 else
         echo "NULSTANDFILE broken ${MESSAGE}${PERFDATA}"
+	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
 	exit $X_UNKN
 fi
 
