@@ -1,0 +1,19 @@
+#!/bin/bash
+
+sbfdata=$(mktemp)
+iskradata=$(mktemp)
+
+if [ -f $sbfdata ]; then
+	echo $sbfdata $iskradata
+else
+	echo niet
+fi
+
+telnet sunnyboy 7776 > $sbfdata
+telnet rpi 7777 > $iskradata
+
+grep -E 'ET|Device|kWh' $sbfdata
+grep --binary-files=text -i kwh $iskradata
+
+rm -f $sbfdata $iskradata
+
