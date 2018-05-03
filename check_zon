@@ -55,7 +55,7 @@ FEEDIN2=$(get_kwh_value '1-0:2.8.2')
 
 ### opslaan/ophalen middernacht stand ###
 
-NULSTANDFILE="$HOME/.energie_nulstand"
+NULSTANDFILE="/var/tmp/energie_nulstand"
 if [ -f $NULSTANDFILE ]; then
 	NSFMOD=$(stat -c %Y "$NULSTANDFILE")
 else
