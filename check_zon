@@ -3,17 +3,106 @@
 sbfdata=$(mktemp)
 iskradata=$(mktemp)
 
-if [ -f $sbfdata ]; then
-	echo $sbfdata $iskradata
+X_OK=0
+X_WARN=1
+X_CRIT=2
+X_UNKN=3
+
+EXITSTATUS=""
+MESSAGE=""
+PERFDATA="|"
+
+telnet sunnyboy 7776 > $sbfdata 2>/dev/null
+telnet rpi 7777 > $iskradata 2>/dev/null
+
+DEVSTATUS=$(awk '/Device Status/ {print $NF}' $sbfdata)
+
+if [ -n "$DEVSTATUS" ] && [ "$DEVSTATUS" = "Ok" ]
+then
+	EXITSTATUS=$X_OK
 else
-	echo niet
+	MESSAGE="Device status is $DEVSTATUS"
+	EXITSTATUS=$X_CRIT
 fi
 
-telnet sunnyboy 7776 > $sbfdata
-telnet rpi 7777 > $iskradata
+DEVTEMP=$(awk '/Device Temperature/ {print $NF}' $sbfdata | sed 's/.C$//' )
 
-grep -E 'ET|Device|kWh' $sbfdata
-grep --binary-files=text -i kwh $iskradata
+PERFDATA="${PERFDATA}devtemp=$DEVTEMP "
+
+PRODTODAY=$(awk '/EToday/ {print $NF}' $sbfdata | sed 's/kWh$//' )
+PRODTOTAL=$(awk '/ETotal/ {print $NF}' $sbfdata | sed 's/kWh$//' )
+GRIDFREQ=$(awk '/Grid Freq/ {print $NF}' $sbfdata | sed 's/Hz$//' )
+
+PERFDATA="${PERFDATA}etoday=$PRODTODAY gridfreq=$GRIDFREQ "
+
+if echo $GRIDFREQ |grep -q '^0\.00'
+then
+	MESSAGE="$MESSAGE OFFLINE"
+fi
+
+MESSAGE="$MESSAGE EToday=$PRODTODAY"
+
+### proces iskra data ###
+
+get_kwh_value () {
+	 grep --binary-files=text -F -- "$1" $iskradata |sed -e 's/[()]/ /g' -e 's/\*kWh//' -e 's/ 00*/ /'  |awk '{print $NF}'
+}
+
+METER1=$(get_kwh_value '1-0:1.8.1')
+METER2=$(get_kwh_value '1-0:1.8.2')
+FEEDIN1=$(get_kwh_value '1-0:2.8.1')
+FEEDIN2=$(get_kwh_value '1-0:2.8.2')
+
+### opslaan/ophalen middernacht stand ###
+
+NULSTANDFILE="$HOME/.energie_nulstand"
+if [ -f $NULSTANDFILE ]; then
+	NSFMOD=$(stat -c %Y "$NULSTANDFILE")
+else
+	NSFMOD=0
+fi
+
+write_nulstand () {
+etotal=$1
+m1=$2
+m2=$3
+l1=$4
+l2=$5
+
+echo "etotal=$etotal" >$NULSTANDFILE
+echo "m1=$m1" >>$NULSTANDFILE
+echo "m2=$m2" >>$NULSTANDFILE
+echo "l1=$l1" >>$NULSTANDFILE
+echo "l2=$l2" >>$NULSTANDFILE
+}
+
+HHMM=$(date "+%H%M")
+EPOCH=$(date "+%s")
+DAGSEC=86400 #seconds
+
+if (( $HHMM < 0060 )) || (( $EPOCH > ($NSFMOD+$DAGSEC) ))
+then
+	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
+	echo "${MESSAGE}${PERFDATA}"
+	exit $X_OK
+elif [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
+	source $NULSTANDFILE
+else
+        echo "NULSTANDFILE broken ${MESSAGE}${PERFDATA}"
+	exit $X_UNKN
+fi
+
+### berekenen werkelijk gebruik ###
+
+eigprodgebr=$( bc <<<"scale=3; $PRODTODAY - ( ($FEEDIN1+$FEEDIN2) - ($l1+$l2) )" )
+gebruik=$( bc <<<"scale=3; ( ($METER1+$METER2) - ($m1+$m2) ) + $eigprodgebr" )
+
+PERFDATA="${PERFDATA}gebruik=$gebruik eigprodgebr=$eigprodgebr "
+
+### output ###
+
+echo "${MESSAGE}${PERFDATA}"
 
 rm -f $sbfdata $iskradata
 
+exit $EXITSTATUS
