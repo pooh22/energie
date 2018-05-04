@@ -3,10 +3,16 @@
 sbfdata=$(mktemp)
 iskradata=$(mktemp)
 
+delete_tempfiles () {
+   rm -f $sbfdata
+   rm -f $iskradata
+}
+
 AWK=/usr/bin/awk
 SED=/bin/sed
 GREP=/bin/grep
 BC=/usr/bin/bc
+NC=/bin/nc
 
 X_OK=0
 X_WARN=1
@@ -17,9 +23,32 @@ EXITSTATUS=""
 MESSAGE=""
 PERFDATA="|"
 
-telnet sunnyboy 7776 > $sbfdata 2>/dev/null
-telnet rpi 7777 > $iskradata 2>/dev/null
+sunnyboy=192.168.9.57
+rpi=192.168.9.28
 
+clean_exit () {
+    exitcode="$1"
+    output="$2"
+
+    echo "$output"
+    delete_tempfiles
+    exit $exitcode
+}
+
+$NC $sunnyboy 7776 > $sbfdata 2>/dev/null
+
+if [ $( wc -l <$sbfdata) -lt 10 ]; then
+	MESSAGE="$MESSAGE SBF data < 10 lines"
+	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+fi
+	
+$NC $rpi 7777 > $iskradata 2>/dev/null
+
+if [ $( wc -l <$iskradata) -lt 10 ]; then
+	MESSAGE="$MESSAGE ISKRA data < 10 lines"
+	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+fi
+	
 DEVSTATUS=$($AWK '/Device Status/ {print $NF}' $sbfdata)
 
 if [ -n "$DEVSTATUS" ] && [ "$DEVSTATUS" = "Ok" ]
@@ -38,6 +67,11 @@ PRODTODAY=$($AWK '/EToday/ {print $NF}' $sbfdata | $SED 's/kWh$//' )
 PRODTOTAL=$($AWK '/ETotal/ {print $NF}' $sbfdata | $SED 's/kWh$//' )
 GRIDFREQ=$($AWK '/Grid Freq/ {print $NF}' $sbfdata | $SED 's/Hz$//' )
 
+if [ -z $PRODTODAY ]; then
+	MESSAGE="$MESSAGE PRODTODAY undefined"
+	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+fi
+
 PERFDATA="${PERFDATA}etoday=$PRODTODAY gridfreq=$GRIDFREQ "
 
 if echo $GRIDFREQ |$GREP -q '^0\.00'
@@ -45,7 +79,7 @@ then
 	MESSAGE="$MESSAGE OFFLINE"
 fi
 
-MESSAGE="$MESSAGE EToday=$PRODTODAY"
+MESSAGE="$MESSAGE EToday=${PRODTODAY}kWh"
 
 ### proces iskra data ###
 
@@ -60,7 +94,8 @@ FEEDIN2=$(get_kwh_value '1-0:2.8.2')
 
 ### opslaan/ophalen middernacht stand ###
 
-NULSTANDFILE="/var/tmp/energie_nulstand"
+NULSTANDFILE="/var/tmp/energie_nulstand.$USER"
+
 if [ -f $NULSTANDFILE ]; then
 	NSFMOD=$(stat -c %Y "$NULSTANDFILE")
 else
@@ -68,17 +103,17 @@ else
 fi
 
 write_nulstand () {
-etotal=$1
-m1=$2
-m2=$3
-l1=$4
-l2=$5
+	etotal=$1
+	m1=$2
+	m2=$3
+	l1=$4
+	l2=$5
 
-echo "etotal=$etotal" >$NULSTANDFILE
-echo "m1=$m1" >>$NULSTANDFILE
-echo "m2=$m2" >>$NULSTANDFILE
-echo "l1=$l1" >>$NULSTANDFILE
-echo "l2=$l2" >>$NULSTANDFILE
+	echo "etotal=$etotal" >$NULSTANDFILE
+	echo "m1=$m1" >>$NULSTANDFILE
+	echo "m2=$m2" >>$NULSTANDFILE
+	echo "l1=$l1" >>$NULSTANDFILE
+	echo "l2=$l2" >>$NULSTANDFILE
 }
 
 HHMM=$(date "+%H%M")
@@ -88,35 +123,70 @@ DAGSEC=86400 #seconds
 if (( $HHMM < 0060 )) || (( $EPOCH > ($NSFMOD+$DAGSEC) ))
 then
 	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
-	echo "${MESSAGE}${PERFDATA}"
-	exit $X_OK
+	clean_exit $X_OK "$MESSAGE$PERFDATA"
 elif [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
 	source $NULSTANDFILE
 	# check values
 	if [ -z $etotal ] || [ -z $m1 ]
 	then
 		write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
-		echo "${MESSAGE}${PERFDATA}"
-		exit $X_UNKN
+		clean_exit $X_UNKN "${MESSAGE}${PERFDATA}"
 	fi
 
 else
-        echo "NULSTANDFILE broken ${MESSAGE}${PERFDATA}"
 	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
-	exit $X_UNKN
+	clean_exit $X_UNKN "NULSTANDFILE broken ${MESSAGE}${PERFDATA}"
 fi
 
 ### berekenen werkelijk gebruik ###
+if [ -z $PRODTODAY ]
+then
+	clean_exit $X_UNKN "ERROR PRODTODAY undef"
+fi
+if [ -z $FEEDIN1 ]
+then
+	clean_exit $X_UNKN "ERROR FEEDIN1 undef"
+fi
+if [ -z $FEEDIN2 ]
+then
+	clean_exit $X_UNKN "ERROR FEEDIN2 undef"
+fi
+if [ -z $l1 ]
+then
+	clean_exit $X_UNKN "ERROR l1 undef"
+fi
+if [ -z $l2 ]
+then
+	clean_exit $X_UNKN "ERROR l2 undef"
+fi
+if [ -z $METER1 ]
+then
+	clean_exit $X_UNKN "ERROR METER1 undef"
+fi
+if [ -z $METER2 ]
+then
+	clean_exit $X_UNKN "ERROR METER2 undef"
+fi
+if [ -z $m1 ]
+then
+	clean_exit $X_UNKN "ERROR m1 undef"
+fi
+if [ -z $m2 ]
+then
+	clean_exit $X_UNKN "ERROR m2 undef"
+fi
 
-eigprodgebr=$( bc <<<"scale=3; $PRODTODAY - ( ($FEEDIN1+$FEEDIN2) - ($l1+$l2) )" )
-gebruik=$( bc <<<"scale=3; ( ($METER1+$METER2) - ($m1+$m2) ) + $eigprodgebr" )
+
+eigprodgebr=$( $BC <<<"scale=3; $PRODTODAY - ( ($FEEDIN1+$FEEDIN2) - ($l1+$l2) )" )
+if [ -z $eigprodgebr ]
+then
+	clean_exit $X_UNKN "ERROR eigprodgebr undef"
+fi
+gebruik=$( $BC <<<"scale=3; ( ($METER1+$METER2) - ($m1+$m2) ) + $eigprodgebr" )
 
 PERFDATA="${PERFDATA}gebruik=$gebruik eigprodgebr=$eigprodgebr "
 
 ### output ###
 
-echo "${MESSAGE}${PERFDATA}"
+clean_exit $EXITSTATUS "${MESSAGE}${PERFDATA}"
 
-rm -f $sbfdata $iskradata
-
-exit $EXITSTATUS
