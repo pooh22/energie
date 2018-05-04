@@ -84,7 +84,7 @@ MESSAGE="$MESSAGE EToday=${PRODTODAY}kWh"
 ### proces iskra data ###
 
 get_kwh_value () {
-	 $GREP --binary-files=text -F -- "$1" $iskradata |sed -e 's/[()]/ /g' -e 's/\*kWh//' -e 's/ 00*/ /'  |$AWK '{print $NF}'
+	 $GREP --binary-files=text -F -- "$1" $iskradata |sed -e 's/[()]/ /g' -e 's/kWh//' -e 's/ 00*/ /' | /usr/bin/tr -d '/*' |$AWK '{print $NF}'
 }
 
 METER1=$(get_kwh_value '1-0:1.8.1')
@@ -175,7 +175,6 @@ if [ -z $m2 ]
 then
 	clean_exit $X_UNKN "ERROR m2 undef"
 fi
-
 
 eigprodgebr=$( $BC <<<"scale=3; $PRODTODAY - ( ($FEEDIN1+$FEEDIN2) - ($l1+$l2) )" )
 if [ -z $eigprodgebr ]
