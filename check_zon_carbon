@@ -34,6 +34,51 @@ HHMM=$(date "+%H%M")
 EPOCH=$(date "+%s")
 DAGSEC=86400 #seconds
 
+#global array for DSMR data
+declare -A DSMRDATA
+declare -A DSMRMAP=( \
+    [timestamp]=0-0:1.0.0\
+    [meter1]=1-0:1.8.1\
+    [meter2]=1-0:1.8.2\
+    [feedin1]=1-0:2.8.1\
+    [feedin2]=1-0:2.8.2\
+    [tariff]=0-0:96.14.0\
+    [using]=0-0:96.14.0\
+    [feeding]=1-0:2.7.0\
+    [allpf]=0-0:96.7.21\
+    [longpf]=0-0:96.7.9\
+    [0-0:1.0.0]=timestamp\
+    [1-0:1.8.1]=meter1\
+    [1-0:1.8.2]=meter2\
+    [1-0:2.8.1]=feedin1\
+    [1-0:2.8.2]=feedin2\
+    [0-0:96.14.0]=tariff\
+    [0-0:96.14.0]=using\
+    [1-0:2.7.0]=feeding\
+    [0-0:96.7.21]=allpf\
+    [0-0:96.7.9]=longpf\
+)
+
+dsmrfill () {
+	local complete=1
+	#read from stdin, write to global associative array DSMRDATA
+	while read line
+	do
+		if grep -q '^[01]-[01]:' <<<"$line"
+		then
+			key=$(dsmr_get_key "$line")
+			value1=$(dsmr_get_value 1 "$line")
+			DSMRDATA["$key"]="$value1"
+			DSMRDATA[$DSMRMAP["$key"]]="$value1"
+		elif grep -q '^\![A-F0-9]'
+		then
+			complete=0
+		fi
+	done
+	return $complete
+}
+
+
 clean_exit () {
     exitcode="$1"
     output="$2"
@@ -44,38 +89,38 @@ clean_exit () {
 }
 
 log_and_send () {
-	local source=$1
-        local name=$2
-        local value=$3
-        
-	if [ $source = "iskra" ]; then
-		LOGFILE=$LOGISKRA
-	elif [ $source = sma ]; then
-		LOGFILE=$LOGSMA
-	fi
-	if ! [ -d $(dirname $LOGFILE) ]; then
-		mkdir -p $(dirname $LOGFILE)
-	fi
+    local source=$1
+    local name=$2
+    local value=$3
 
-	echo energie.$source.$name $value $EPOCH | /usr/bin/tee -a $LOGFILE |
-		$NC -c $carbon $carbonport
+    if [ $source = "iskra" ]; then
+        LOGFILE=$LOGISKRA
+    elif [ $source = sma ]; then
+        LOGFILE=$LOGSMA
+    fi
+    if ! [ -d $(dirname $LOGFILE) ]; then
+        mkdir -p $(dirname $LOGFILE)
+    fi
+
+    echo energie.$source.$name $value $EPOCH | /usr/bin/tee -a $LOGFILE |
+        $NC -c $carbon $carbonport
 }
 
 
 $NC $sunnyboy 7776 > $sbfdata 2>/dev/null
 
 if [ $( wc -l <$sbfdata) -lt 10 ]; then
-	MESSAGE="$MESSAGE SBF data < 10 lines"
-	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+    MESSAGE="$MESSAGE SBF data < 10 lines"
+    clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 fi
-	
+
 $NC $rpi 7777 > $iskradata 2>/dev/null
 
 if [ $( wc -l <$iskradata) -lt 10 ]; then
 	MESSAGE="$MESSAGE ISKRA data < 10 lines"
 	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 fi
-	
+
 DEVSTATUS=$($AWK '/Device Status/ {print $NF}' $sbfdata)
 
 if [ -n "$DEVSTATUS" ] && [ "$DEVSTATUS" = "Ok" ]
