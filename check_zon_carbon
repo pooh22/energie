@@ -1,0 +1,236 @@
+#!/bin/bash
+
+sbfdata=$(mktemp)
+iskradata=$(mktemp)
+
+delete_tempfiles () {
+   rm -f $sbfdata
+   rm -f $iskradata
+}
+
+AWK=/usr/bin/awk
+SED=/bin/sed
+GREP=/bin/grep
+BC=/usr/bin/bc
+NC=/bin/nc
+
+X_OK=0
+X_WARN=1
+X_CRIT=2
+X_UNKN=3
+
+EXITSTATUS=""
+MESSAGE=""
+PERFDATA="|"
+
+sunnyboy=192.168.9.57
+rpi=192.168.9.28
+carbon=192.168.9.60
+carbonport=2003
+
+LOGISKRA=/var/log/energie/$(date "+%Y")/$(date "+%m")/iskra-$(date "+%Y%m%d").log
+LOGSMA=/var/log/energie/$(date "+%Y")/$(date "+%m")/sma-$(date "+%Y%m%d").log
+HHMM=$(date "+%H%M")
+EPOCH=$(date "+%s")
+DAGSEC=86400 #seconds
+
+clean_exit () {
+    exitcode="$1"
+    output="$2"
+
+    echo "$output"
+    delete_tempfiles
+    exit $exitcode
+}
+
+log_and_send () {
+	local source=$1
+        local name=$2
+        local value=$3
+        
+	if [ $source = "iskra" ]; then
+		LOGFILE=$LOGISKRA
+	elif [ $source = sma ]; then
+		LOGFILE=$LOGSMA
+	fi
+	if ! [ -d $(dirname $LOGFILE) ]; then
+		mkdir -p $(dirname $LOGFILE)
+	fi
+
+	echo energie.$source.$name $value $EPOCH | /usr/bin/tee -a $LOGFILE |
+		$NC -c $carbon $carbonport
+}
+
+
+$NC $sunnyboy 7776 > $sbfdata 2>/dev/null
+
+if [ $( wc -l <$sbfdata) -lt 10 ]; then
+	MESSAGE="$MESSAGE SBF data < 10 lines"
+	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+fi
+	
+$NC $rpi 7777 > $iskradata 2>/dev/null
+
+if [ $( wc -l <$iskradata) -lt 10 ]; then
+	MESSAGE="$MESSAGE ISKRA data < 10 lines"
+	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+fi
+	
+DEVSTATUS=$($AWK '/Device Status/ {print $NF}' $sbfdata)
+
+if [ -n "$DEVSTATUS" ] && [ "$DEVSTATUS" = "Ok" ]
+then
+	EXITSTATUS=$X_OK
+else
+	MESSAGE="Device status is $DEVSTATUS"
+	EXITSTATUS=$X_CRIT
+fi
+
+DEVTEMP=$($AWK '/Device Temperature/ {print $NF}' $sbfdata | $SED 's/.C$//' )
+log_and_send sma device.temp $DEVTEMP
+
+PERFDATA="${PERFDATA}devtemp=$DEVTEMP "
+
+PRODTODAY=$($AWK '/EToday/ {print $NF}' $sbfdata | $SED 's/kWh$//' )
+log_and_send sma prod.etoday $PRODTODAY
+
+PRODTOTAL=$($AWK '/ETotal/ {print $NF}' $sbfdata | $SED 's/kWh$//' )
+log_and_send sma prod.etotal $PRODTOTAL
+
+#DC Spot Data:
+#        String 1 Pdc:   0.096kW - Udc: 169.55V - Idc:  0.571A
+#        String 2 Pdc:   0.724kW - Udc: 267.31V - Idc:  2.712A
+
+for spot in "String 1" "String 2"
+do
+	safename=$(tr ' ' '_' <<<"$spot")
+	PDCDATA=$($AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $sbfdata | $SED 's/kW$//' )
+	log_and_send sma spot.$safename.pdc $PDCDATA
+	UDCDATA=$($AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $sbfdata | $SED 's/V$//' )
+	log_and_send sma spot.$safename.udc $UDCDATA
+	IDCDATA=$($AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $sbfdata | $SED 's/A$//' )
+	log_and_send sma spot.$safename.idc $IDCDATA
+done
+
+#gridfreq blijft hier even staan, maar eigenlijk niet monitoren...
+
+GRIDFREQ=$($AWK '/Grid Freq/ {print $NF}' $sbfdata | $SED 's/Hz$//' )
+
+if [ -z $PRODTODAY ]; then
+	MESSAGE="$MESSAGE PRODTODAY undefined"
+	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+fi
+
+PERFDATA="${PERFDATA}etoday=$PRODTODAY gridfreq=$GRIDFREQ "
+
+if echo $GRIDFREQ |$GREP -q '^0\.00'
+then
+	MESSAGE="$MESSAGE OFFLINE"
+fi
+
+MESSAGE="$MESSAGE EToday=${PRODTODAY}kWh"
+
+### proces iskra data ###
+
+get_kwh_value () {
+	 $GREP --binary-files=text -F -- "$1" $iskradata |sed -e 's/[()]/ /g' -e 's/kWh//' -e 's/ 00*/ /' | /usr/bin/tr -d '/*' |$AWK '{print $NF}'
+}
+
+METER1=$(get_kwh_value '1-0:1.8.1')
+METER2=$(get_kwh_value '1-0:1.8.2')
+FEEDIN1=$(get_kwh_value '1-0:2.8.1')
+FEEDIN2=$(get_kwh_value '1-0:2.8.2')
+
+### opslaan/ophalen middernacht stand ###
+
+NULSTANDFILE="/var/tmp/energie_nulstand.$USER"
+
+if [ -f $NULSTANDFILE ]; then
+	NSFMOD=$(stat -c %Y "$NULSTANDFILE")
+else
+	NSFMOD=0
+fi
+
+write_nulstand () {
+	etotal=$1
+	m1=$2
+	m2=$3
+	l1=$4
+	l2=$5
+
+	echo "etotal=$etotal" >$NULSTANDFILE
+	echo "m1=$m1" >>$NULSTANDFILE
+	echo "m2=$m2" >>$NULSTANDFILE
+	echo "l1=$l1" >>$NULSTANDFILE
+	echo "l2=$l2" >>$NULSTANDFILE
+}
+
+if (( $HHMM < 0060 )) || (( $EPOCH > ($NSFMOD+$DAGSEC) ))
+then
+	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
+	clean_exit $X_OK "$MESSAGE$PERFDATA"
+elif [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
+	source $NULSTANDFILE
+	# check values
+	if [ -z $etotal ] || [ -z $m1 ]
+	then
+		write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
+		clean_exit $X_UNKN "${MESSAGE}${PERFDATA}"
+	fi
+
+else
+	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
+	clean_exit $X_UNKN "NULSTANDFILE broken ${MESSAGE}${PERFDATA}"
+fi
+
+### berekenen werkelijk gebruik ###
+if [ -z $PRODTODAY ]
+then
+	clean_exit $X_UNKN "ERROR PRODTODAY undef"
+fi
+if [ -z $FEEDIN1 ]
+then
+	clean_exit $X_UNKN "ERROR FEEDIN1 undef"
+fi
+if [ -z $FEEDIN2 ]
+then
+	clean_exit $X_UNKN "ERROR FEEDIN2 undef"
+fi
+if [ -z $l1 ]
+then
+	clean_exit $X_UNKN "ERROR l1 undef"
+fi
+if [ -z $l2 ]
+then
+	clean_exit $X_UNKN "ERROR l2 undef"
+fi
+if [ -z $METER1 ]
+then
+	clean_exit $X_UNKN "ERROR METER1 undef"
+fi
+if [ -z $METER2 ]
+then
+	clean_exit $X_UNKN "ERROR METER2 undef"
+fi
+if [ -z $m1 ]
+then
+	clean_exit $X_UNKN "ERROR m1 undef"
+fi
+if [ -z $m2 ]
+then
+	clean_exit $X_UNKN "ERROR m2 undef"
+fi
+
+eigprodgebr=$( $BC <<<"scale=3; $PRODTODAY - ( ($FEEDIN1+$FEEDIN2) - ($l1+$l2) )" )
+if [ -z $eigprodgebr ]
+then
+	clean_exit $X_UNKN "ERROR eigprodgebr undef"
+fi
+gebruik=$( $BC <<<"scale=3; ( ($METER1+$METER2) - ($m1+$m2) ) + $eigprodgebr" )
+
+PERFDATA="${PERFDATA}gebruik=$gebruik eigprodgebr=$eigprodgebr "
+
+### output ###
+
+clean_exit $EXITSTATUS "${MESSAGE}${PERFDATA}"
+
