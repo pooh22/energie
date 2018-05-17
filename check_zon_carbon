@@ -106,6 +106,14 @@ log_and_send () {
         $NC -c $carbon $carbonport
 }
 
+if $NC $rpi 7777 | dsmrfill
+then
+	echo meter1=$DSMRDATA[meter1]
+	clean_exit 0 ok
+else
+	clean_exit 1 "dsmrfill incomplete input"
+fi
+
 
 $NC $sunnyboy 7776 > $sbfdata 2>/dev/null
 
