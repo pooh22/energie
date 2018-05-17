@@ -59,6 +59,11 @@ declare -A DSMRMAP=( \
     [0-0:96.7.9]=longpf\
 )
 
+timestamp_to_epoch () {
+	local ts=$1
+	date -d "$(sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)./\1-\2-\3 \4:\5:\6/' <<<"$ts")" +%s
+}
+
 dsmrfill () {
 	local fn="$1"
 	local fl=$(wc -l <$fn)
@@ -75,6 +80,7 @@ dsmrfill () {
 			DSMRDATA[${DSMRMAP[$k]}]=$value
 		fi
 	done
+	DSMRDATA[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
 }
 
 
@@ -108,7 +114,7 @@ log_and_send () {
 $NC $rpi 7777 > $iskradata 2>/dev/null
 if dsmrfill "$iskradata"
 then
-        for k in "${!DSMRMAP[@]}"
+        for k in "${!DSMRDATA[@]}"
         do      
 		echo "dsmrdata: $k = ${DSMRDATA[$k]}"
 	done
