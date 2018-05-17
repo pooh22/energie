@@ -43,7 +43,7 @@ declare -A DSMRMAP=( \
     [feedin1]=1-0:2.8.1\
     [feedin2]=1-0:2.8.2\
     [tariff]=0-0:96.14.0\
-    [using]=0-0:96.14.0\
+    [using]=1-0:1.7.0\
     [feeding]=1-0:2.7.0\
     [allpf]=0-0:96.7.21\
     [longpf]=0-0:96.7.9\
@@ -53,29 +53,28 @@ declare -A DSMRMAP=( \
     [1-0:2.8.1]=feedin1\
     [1-0:2.8.2]=feedin2\
     [0-0:96.14.0]=tariff\
-    [0-0:96.14.0]=using\
+    [1-0:1.7.0]=using\
     [1-0:2.7.0]=feeding\
     [0-0:96.7.21]=allpf\
     [0-0:96.7.9]=longpf\
 )
 
 dsmrfill () {
-	local complete=1
-	#read from stdin, write to global associative array DSMRDATA
-	while read line
+	local fn="$1"
+	local fl=$(wc -l <$fn)
+	if ! grep  --binary-files=text -q '^\![A-F0-9]' $fn
+	then
+		return 1
+	fi
+
+	for k in "${!DSMRMAP[@]}"
 	do
-		if grep -q '^[01]-[01]:' <<<"$line"
-		then
-			key=$(dsmr_get_key "$line")
-			value1=$(dsmr_get_value 1 "$line")
-			DSMRDATA["$key"]="$value1"
-			DSMRDATA[$DSMRMAP["$key"]]="$value1"
-		elif grep -q '^\![A-F0-9]'
-		then
-			complete=0
+		if [[ $k = [01]-[01]* ]]; then
+			local value=$(grep  --binary-files=text "$k" $fn |tr '()' ' ' |awk '{print $2}' |sed 's/^00*//')
+			DSMRDATA[$k]=$value
+			DSMRDATA[${DSMRMAP[$k]}]=$value
 		fi
 	done
-	return $complete
 }
 
 
@@ -106,12 +105,17 @@ log_and_send () {
         $NC -c $carbon $carbonport
 }
 
-if $NC $rpi 7777 | dsmrfill
+$NC $rpi 7777 > $iskradata 2>/dev/null
+if dsmrfill "$iskradata"
 then
-	echo meter1=$DSMRDATA[meter1]
+        for k in "${!DSMRMAP[@]}"
+        do      
+		echo "dsmrdata: $k = ${DSMRDATA[$k]}"
+	done
+	echo =====
 	clean_exit 0 ok
 else
-	clean_exit 1 "dsmrfill incomplete input"
+	clean_exit $? "dsmrfill incomplete input"
 fi
 
 
