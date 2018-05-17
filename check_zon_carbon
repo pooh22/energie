@@ -58,6 +58,21 @@ declare -A DSMRMAP=( \
     [0-0:96.7.21]=allpf\
     [0-0:96.7.9]=longpf\
 )
+#global array for SMA data
+declare -A SMADATA
+
+strip_unit () {
+	local fullvalue="$1"
+	local unit="$2"
+
+	if ! grep -q -- "$unit" <<<"$fullvalue"
+	then
+		echo "Unit not found"
+		return 1
+	fi
+
+	echo $fullvalue | tr '*' ' ' | sed 's/'"$unit"'//'
+}
 
 dsmrfill () {
 	local fn="$1"
@@ -71,9 +86,39 @@ dsmrfill () {
 	do
 		if [[ $k = [01]-[01]* ]]; then
 			local value=$(grep  --binary-files=text "$k" $fn |tr '()' ' ' |awk '{print $2}' |sed 's/^00*//')
+			if [ -z $value ]; then
+				value=NaN
+			fi
 			DSMRDATA[$k]=$value
 			DSMRDATA[${DSMRMAP[$k]}]=$value
 		fi
+	done
+}
+
+smafill () {
+	local fn="$1"
+	local fl=$(wc -l <$fn)
+
+	if [ $fl -lt 10 ]; then
+		echo "incomplete input smafill"
+		return 1
+	fi
+
+	SMADATA[device.status]=$($AWK '/Device Status/ {print $NF}' $fn)
+	SMADATA[device.temperature]=$($AWK '/Device Temperature/ {print $NF}' $fn | $SED 's/.C$//' )
+	SMADATA[prod.etoday]=$(strip_unit $($AWK '/EToday/ {print $NF}' $fn ) kWh )
+	SMADATA[prod.etotal]=$(strip_unit $($AWK '/ETotal/ {print $NF}' $fn ) kWh )
+
+#DC Spot Data:
+#        String 1 Pdc:   0.096kW - Udc: 169.55V - Idc:  0.571A
+#        String 2 Pdc:   0.724kW - Udc: 267.31V - Idc:  2.712A
+
+	for spot in "String 1" "String 2"
+	do
+		safename=$(tr ' ' '_' <<<"$spot")
+		SMADATA[spot.$safename.pdc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $fn ) kW )
+		SMADATA[spot.$safename.udc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $fn ) V )
+		SMADATA[spot.$safename.idc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $fn ) A )
 	done
 }
 
@@ -101,41 +146,26 @@ log_and_send () {
         mkdir -p $(dirname $LOGFILE)
     fi
 
-    echo energie.$source.$name $value $EPOCH | /usr/bin/tee -a $LOGFILE |
-        $NC -c $carbon $carbonport
+    #echo energie.$source.$name $value $EPOCH | /usr/bin/tee -a $LOGFILE |
+    #    $NC -c $carbon $carbonport
+    echo energie.$source.$name $value $EPOCH >> $LOGFILE
 }
-
-$NC $rpi 7777 > $iskradata 2>/dev/null
-if dsmrfill "$iskradata"
-then
-        for k in "${!DSMRMAP[@]}"
-        do      
-		echo "dsmrdata: $k = ${DSMRDATA[$k]}"
-	done
-	echo =====
-	clean_exit 0 ok
-else
-	clean_exit $? "dsmrfill incomplete input"
-fi
-
 
 $NC $sunnyboy 7776 > $sbfdata 2>/dev/null
 
-if [ $( wc -l <$sbfdata) -lt 10 ]; then
-    MESSAGE="$MESSAGE SBF data < 10 lines"
+if ! smafill $sbfdata
+    MESSAGE="$MESSAGE SBF data incomplete"
     clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 fi
 
 $NC $rpi 7777 > $iskradata 2>/dev/null
 
-if [ $( wc -l <$iskradata) -lt 10 ]; then
-	MESSAGE="$MESSAGE ISKRA data < 10 lines"
+if ! dsmrfill $iskradata
+	MESSAGE="$MESSAGE ISKRA data incomplete"
 	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 fi
 
-DEVSTATUS=$($AWK '/Device Status/ {print $NF}' $sbfdata)
-
-if [ -n "$DEVSTATUS" ] && [ "$DEVSTATUS" = "Ok" ]
+if [ -n "${SMADATA[device.status]}" ] && [ "${SMADATA[device.status]}" = "Ok" ]
 then
 	EXITSTATUS=$X_OK
 else
@@ -143,31 +173,14 @@ else
 	EXITSTATUS=$X_CRIT
 fi
 
-DEVTEMP=$($AWK '/Device Temperature/ {print $NF}' $sbfdata | $SED 's/.C$//' )
-log_and_send sma device.temp $DEVTEMP
-
-PERFDATA="${PERFDATA}devtemp=$DEVTEMP "
-
-PRODTODAY=$($AWK '/EToday/ {print $NF}' $sbfdata | $SED 's/kWh$//' )
-log_and_send sma prod.etoday $PRODTODAY
-
-PRODTOTAL=$($AWK '/ETotal/ {print $NF}' $sbfdata | $SED 's/kWh$//' )
-log_and_send sma prod.etotal $PRODTOTAL
-
-#DC Spot Data:
-#        String 1 Pdc:   0.096kW - Udc: 169.55V - Idc:  0.571A
-#        String 2 Pdc:   0.724kW - Udc: 267.31V - Idc:  2.712A
-
-for spot in "String 1" "String 2"
+for k in "${!SMADATA[@]}"
 do
-	safename=$(tr ' ' '_' <<<"$spot")
-	PDCDATA=$($AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $sbfdata | $SED 's/kW$//' )
-	log_and_send sma spot.$safename.pdc $PDCDATA
-	UDCDATA=$($AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $sbfdata | $SED 's/V$//' )
-	log_and_send sma spot.$safename.udc $UDCDATA
-	IDCDATA=$($AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $sbfdata | $SED 's/A$//' )
-	log_and_send sma spot.$safename.idc $IDCDATA
+	log_and_send sma $k "${SMADATA[$k]}"
 done
+
+PERFDATA="${PERFDATA}devtemp=${SMADATA[device.temperature]} "
+
+
 
 #gridfreq blijft hier even staan, maar eigenlijk niet monitoren...
 
@@ -178,25 +191,23 @@ if [ -z $PRODTODAY ]; then
 	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 fi
 
-PERFDATA="${PERFDATA}etoday=$PRODTODAY gridfreq=$GRIDFREQ "
+PERFDATA="${PERFDATA}etoday=${SMADATA[prod.etoday]} "
+PERFDATA="${PERFDATA}gridfreq=$GRIDFREQ "
 
 if echo $GRIDFREQ |$GREP -q '^0\.00'
 then
 	MESSAGE="$MESSAGE OFFLINE"
 fi
 
-MESSAGE="$MESSAGE EToday=${PRODTODAY}kWh"
+MESSAGE="$MESSAGE EToday=${SMADATA[prod.etoday]}kWh"
 
 ### proces iskra data ###
 
-get_kwh_value () {
-	 $GREP --binary-files=text -F -- "$1" $iskradata |sed -e 's/[()]/ /g' -e 's/kWh//' -e 's/ 00*/ /' | /usr/bin/tr -d '/*' |$AWK '{print $NF}'
-}
-
-METER1=$(get_kwh_value '1-0:1.8.1')
-METER2=$(get_kwh_value '1-0:1.8.2')
-FEEDIN1=$(get_kwh_value '1-0:2.8.1')
-FEEDIN2=$(get_kwh_value '1-0:2.8.2')
+METER1=$(strip_unit ${DSMRDATA[meter1]} kWh)
+METER2=$(strip_unit ${DSMRDATA[meter2]} kWh)
+FEEDIN1=$(strip_unit ${DSMRDATA[feedin1]} kWh)
+FEEDIN2=$(strip_unit ${DSMRDATA[feedin2]} kWh)
+PRODTOTAL="${SMADATA[prod.etoday]}"
 
 ### opslaan/ophalen middernacht stand ###
 
@@ -225,7 +236,7 @@ write_nulstand () {
 if (( $HHMM < 0060 )) || (( $EPOCH > ($NSFMOD+$DAGSEC) ))
 then
 	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
-	clean_exit $X_OK "$MESSAGE$PERFDATA"
+	clean_exit $X_OK "${MESSAGE}${PERFDATA}"
 elif [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
 	source $NULSTANDFILE
 	# check values
