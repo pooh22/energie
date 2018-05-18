@@ -1,5 +1,7 @@
 #!/bin/bash
 
+PROG=$(basename $0)
+
 sbfdata=$(mktemp)
 iskradata=$(mktemp)
 
@@ -28,6 +30,8 @@ rpi=192.168.9.28
 carbon=192.168.9.60
 carbonport=2003
 
+DSMRCACHE=/tmp/cache.$PROG.iskra
+SMACACHE=/tmp/cache.$PROG.sma
 LOGISKRA=/var/log/energie/$(date "+%Y")/$(date "+%m")/iskra-$(date "+%Y%m%d").log
 LOGSMA=/var/log/energie/$(date "+%Y")/$(date "+%m")/sma-$(date "+%Y%m%d").log
 HHMM=$(date "+%H%M")
@@ -102,6 +106,36 @@ dsmrfill () {
 	DSMRDATA[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
 }
 
+read_dsmr () {
+	local ip="$1"
+	local port="$2"
+	local cachetime="$3"
+	local cachefile="$4"
+
+
+	if [ -f $cachefile ]; then
+		dsmrfill $cachefile
+		cache_date=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
+		cache_age=$(( $EPOCH - $cache_date ))
+	else
+		cache_age=$(($cachetime +1))
+	fi
+
+	if [ $cache_age -gt $cachetime ]; then
+		$NC $ip $port > $iskradata 2>/dev/null
+
+		if dsmrfill $iskradata
+		then
+			cp $iskradata $cachefile
+		else
+			MESSAGE="$MESSAGE ISKRA data incomplete"
+			clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+		fi
+	fi
+}
+
+
+
 smafill () {
 	local fn="$1"
 	local fl=$(wc -l <$fn)
@@ -127,6 +161,33 @@ smafill () {
 		SMADATA[spot.$safename.udc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $fn ) V )
 		SMADATA[spot.$safename.idc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $fn ) A )
 	done
+}
+
+read_sma () {
+	local ip="$1"
+	local port="$2"
+	local cachetime="$3"
+	local cachefile="$4"
+
+
+	if [ -f $cachefile ]; then
+		cache_date=$(stat --format "%Y" $cachefile)
+		cache_age=$(( $EPOCH - $cache_date ))
+	else
+		cache_age=$(($cachetime +1))
+	fi
+
+	if [ $cache_age -gt $cachetime ]; then
+		$NC $ip $port > $sbfdata 2>/dev/null
+
+		if smafill $sbfdata
+		then
+			cp $sbfdata $cachefile
+		else
+			MESSAGE="$MESSAGE SMA data incomplete"
+			clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+		fi
+	fi
 }
 
 
@@ -158,19 +219,9 @@ log_and_send () {
     echo energie.$source.$name $value $EPOCH >> $LOGFILE
 }
 
-$NC $sunnyboy 7776 > $sbfdata 2>/dev/null
+read_sma $sunnyboy 7776 60 $SMACACHE
 
-if ! smafill $sbfdata
-    MESSAGE="$MESSAGE SBF data incomplete"
-    clean_exit $X_UNKN "$MESSAGE$PERFDATA"
-fi
-
-$NC $rpi 7777 > $iskradata 2>/dev/null
-
-if ! dsmrfill $iskradata
-	MESSAGE="$MESSAGE ISKRA data incomplete"
-	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
-fi
+read_dsmr $rpi 7777 60 $DSMRCACHE
 
 if [ -n "${SMADATA[device.status]}" ] && [ "${SMADATA[device.status]}" = "Ok" ]
 then
@@ -186,8 +237,6 @@ do
 done
 
 PERFDATA="${PERFDATA}devtemp=${SMADATA[device.temperature]} "
-
-
 
 #gridfreq blijft hier even staan, maar eigenlijk niet monitoren...
 
