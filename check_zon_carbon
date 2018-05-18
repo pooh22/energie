@@ -133,9 +133,15 @@ dsmrfill () {
 	TMP[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
 
 	if [ -z "$old" ]; then
-		SMADATA=(${TMP[@]})
+		for k in "${TMP[@]}"
+		do
+			DSMRDATA[$k]=${TMP[$k]}
+		done
 	else
-		SMADATAOLD=(${TMP[@]})
+		for k in "${!TMP[@]}"
+		do
+			DSMRDATAOLD["$k"]=${TMP["$k"]}
+		done
 	fi
 }
 
@@ -208,9 +214,15 @@ smafill () {
 	TMP[epoch]=$(stat --format "%Y" $fn)
 
 	if [ -z "$old" ]; then
-		SMADATA=(${TMP[@]})
+		for k in "${TMP[@]}"
+		do
+			SMADATA[$k]=${TMP[$k]}
+		done
 	else
-		SMADATAOLD=(${TMP[@]})
+		for k in "${TMP[@]}"
+		do
+			SMADATAOLD[$k]=${TMP[$k]}
+		done
 	fi
 }
 
