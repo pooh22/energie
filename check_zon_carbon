@@ -30,10 +30,18 @@ rpi=192.168.9.28
 carbon=192.168.9.60
 carbonport=2003
 
+#short term cache file:
 DSMRCACHE=/tmp/cache.$PROG.iskra
 SMACACHE=/tmp/cache.$PROG.sma
+
+#keep track of origin of data used:
+SMADATA_FROM_CACHE=0
+DSMRDATA_FROM_CACHE=0
+
+#logfiles
 LOGISKRA=/var/log/energie/$(date "+%Y")/$(date "+%m")/iskra-$(date "+%Y%m%d").log
 LOGSMA=/var/log/energie/$(date "+%Y")/$(date "+%m")/sma-$(date "+%Y%m%d").log
+
 HHMM=$(date "+%H%M")
 EPOCH=$(date "+%s")
 DAGSEC=86400 #seconds
@@ -115,6 +123,7 @@ read_dsmr () {
 
 	if [ -f $cachefile ]; then
 		dsmrfill $cachefile
+		DSMRDATA_FROM_CACHE=1
 		cache_date=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
 		cache_age=$(( $EPOCH - $cache_date ))
 	else
@@ -189,6 +198,7 @@ read_sma () {
 		fi
 	else
 		smafill $cachefile
+		SMADATA_FROM_CACHE=1
 	fi
 }
 
@@ -209,8 +219,16 @@ log_and_send () {
 
     if [ $source = "iskra" ]; then
         LOGFILE=$LOGISKRA
+	if [ $DSMRDATA_FROM_CACHE = 1 ]; then
+		#don't log old data
+		return 0
+	fi
     elif [ $source = sma ]; then
         LOGFILE=$LOGSMA
+	if [ $SMADATA_FROM_CACHE = 1 ]; then
+		#don't log old data
+		return 0
+	fi
     fi
     if ! [ -d $(dirname $LOGFILE) ]; then
         mkdir -p $(dirname $LOGFILE)
