@@ -48,6 +48,10 @@ DAGSEC=86400 #seconds
 
 #global array for DSMR data
 declare -A DSMRDATA
+
+#global array for previous DSMR data
+declare -A DSMRDATAOLD
+
 declare -A DSMRMAP=( \
     [timestamp]=0-0:1.0.0\
     [meter1]=1-0:1.8.1\
@@ -74,6 +78,9 @@ declare -A DSMRMAP=( \
 #global array for SMA data
 declare -A SMADATA
 
+#global array for previous SMA data
+declare -A SMADATAOLD
+
 strip_unit () {
 	local fullvalue="$1"
 	local unit="$2"
@@ -92,9 +99,18 @@ timestamp_to_epoch () {
 	date -d "$(sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)./\1-\2-\3 \4:\5:\6/' <<<"$ts")" +%s
 }
 
+#fill DSMRDATA or DSMRDATAOLD if second argument is "old"
 dsmrfill () {
 	local fn="$1"
+	local old="$2"
 	local fl=$(wc -l <$fn)
+
+	if [ -n "$old" ] && [ "$old" = old ]; then
+		: # ok
+	else
+		old=""
+	fi
+
 	if ! grep  --binary-files=text -q '^\![A-F0-9]' $fn
 	then
 		return 1
@@ -107,11 +123,20 @@ dsmrfill () {
 			if [ -z $value ]; then
 				value=NaN
 			fi
-			DSMRDATA[$k]=$value
-			DSMRDATA[${DSMRMAP[$k]}]=$value
+			if [ -z $old ]; then
+				DSMRDATA[$k]=$value
+				DSMRDATA[${DSMRMAP[$k]}]=$value
+			elif [ "$old" = old ]; then
+				DSMRDATAOLD[$k]=$value
+				DSMRDATAOLD[${DSMRMAP[$k]}]=$value
+			fi
 		fi
 	done
-	DSMRDATA[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
+	if [ -z $old ]; then
+		DSMRDATA[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
+	elif [ "$old" = old ]; then
+		DSMRDATAOLD[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
+	fi
 }
 
 read_dsmr () {
@@ -135,41 +160,63 @@ read_dsmr () {
 
 		if dsmrfill $iskradata
 		then
+			cp -a $cachefile $cachefile.1
 			cp $iskradata $cachefile
 		else
 			MESSAGE="$MESSAGE ISKRA data incomplete"
 			clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 		fi
 	fi
+
+	if [ -f $cachefile.1 ]; then
+		dsmrfill $cachefile.1 old
+	fi
 }
 
 
 
+#fill SMADATA or SMADATAOLD if second argument is "old"
 smafill () {
 	local fn="$1"
+	local old="$2"
 	local fl=$(wc -l <$fn)
+
+	if [ -n "$old" ] && [ "$old" = old ]; then
+		: # ok
+	else
+		old=""
+	fi
 
 	if [ $fl -lt 10 ]; then
 		echo "incomplete input smafill"
 		return 1
 	fi
 
-	SMADATA[device.status]=$($AWK '/Device Status/ {print $NF}' $fn)
-	SMADATA[device.temperature]=$($AWK '/Device Temperature/ {print $NF}' $fn | $SED 's/.C$//' )
-	SMADATA[prod.etoday]=$(strip_unit $($AWK '/EToday/ {print $NF}' $fn ) kWh )
-	SMADATA[prod.etotal]=$(strip_unit $($AWK '/ETotal/ {print $NF}' $fn ) kWh )
-
-#DC Spot Data:
-#        String 1 Pdc:   0.096kW - Udc: 169.55V - Idc:  0.571A
-#        String 2 Pdc:   0.724kW - Udc: 267.31V - Idc:  2.712A
-
-	for spot in "String 1" "String 2"
-	do
-		safename=$(tr ' ' '_' <<<"$spot")
-		SMADATA[spot.$safename.pdc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $fn ) kW )
-		SMADATA[spot.$safename.udc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $fn ) V )
-		SMADATA[spot.$safename.idc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $fn ) A )
-	done
+	if [ -z "$old" ]; then
+		SMADATA[device.status]=$($AWK '/Device Status/ {print $NF}' $fn)
+		SMADATA[device.temperature]=$($AWK '/Device Temperature/ {print $NF}' $fn | $SED 's/.C$//' )
+		SMADATA[prod.etoday]=$(strip_unit $($AWK '/EToday/ {print $NF}' $fn ) kWh )
+		SMADATA[prod.etotal]=$(strip_unit $($AWK '/ETotal/ {print $NF}' $fn ) kWh )
+		for spot in "String 1" "String 2"
+		do
+			safename=$(tr ' ' '_' <<<"$spot")
+			SMADATA[spot.$safename.pdc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $fn ) kW )
+			SMADATA[spot.$safename.udc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $fn ) V )
+			SMADATA[spot.$safename.idc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $fn ) A )
+		done
+	else
+		SMADATAOLD[device.status]=$($AWK '/Device Status/ {print $NF}' $fn)
+		SMADATAOLD[device.temperature]=$($AWK '/Device Temperature/ {print $NF}' $fn | $SED 's/.C$//' )
+		SMADATAOLD[prod.etoday]=$(strip_unit $($AWK '/EToday/ {print $NF}' $fn ) kWh )
+		SMADATAOLD[prod.etotal]=$(strip_unit $($AWK '/ETotal/ {print $NF}' $fn ) kWh )
+		for spot in "String 1" "String 2"
+		do
+			safename=$(tr ' ' '_' <<<"$spot")
+			SMADATAOLD[spot.$safename.pdc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $fn ) kW )
+			SMADATAOLD[spot.$safename.udc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $fn ) V )
+			SMADATAOLD[spot.$safename.idc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $fn ) A )
+		done
+	fi
 }
 
 read_sma () {
@@ -191,6 +238,7 @@ read_sma () {
 
 		if smafill $sbfdata
 		then
+			cp -a $cachefile $cachefile.1
 			cp $sbfdata $cachefile
 		else
 			MESSAGE="$MESSAGE SMA data incomplete"
@@ -199,6 +247,10 @@ read_sma () {
 	else
 		smafill $cachefile
 		SMADATA_FROM_CACHE=1
+	fi
+
+	if [ -f $cachefile.1 ]; then
+		smafill $cachefile.1 old
 	fi
 }
 
