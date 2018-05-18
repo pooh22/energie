@@ -95,7 +95,7 @@ dsmrfill () {
 	for k in "${!DSMRMAP[@]}"
 	do
 		if [[ $k = [01]-[01]* ]]; then
-			local value=$(grep  --binary-files=text "$k" $fn |tr '()' ' ' |awk '{print $2}' |sed 's/^00*//')
+			local value=$(grep  --binary-files=text "$k" $fn |tr '()' ' ' |awk '{print $2}' |sed -e 's/^00*//' -e 's/\*.*//')
 			if [ -z $value ]; then
 				value=NaN
 			fi
@@ -187,6 +187,8 @@ read_sma () {
 			MESSAGE="$MESSAGE SMA data incomplete"
 			clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 		fi
+	else
+		smafill $cachefile
 	fi
 }
 
@@ -236,14 +238,19 @@ do
 	log_and_send sma $k "${SMADATA[$k]}"
 done
 
+for k in "${!DSMRDATA[@]}"
+do
+	log_and_send iskra $k "${DSMRDATA[$k]}"
+done
+
 PERFDATA="${PERFDATA}devtemp=${SMADATA[device.temperature]} "
 
 #gridfreq blijft hier even staan, maar eigenlijk niet monitoren...
 
 GRIDFREQ=$($AWK '/Grid Freq/ {print $NF}' $sbfdata | $SED 's/Hz$//' )
 
-if [ -z $PRODTODAY ]; then
-	MESSAGE="$MESSAGE PRODTODAY undefined"
+if [ -z ${SMADATA[prod.etoday]} ]; then
+	MESSAGE="$MESSAGE prod.etoday undefined"
 	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 fi
 
@@ -259,10 +266,10 @@ MESSAGE="$MESSAGE EToday=${SMADATA[prod.etoday]}kWh"
 
 ### proces iskra data ###
 
-METER1=$(strip_unit ${DSMRDATA[meter1]} kWh)
-METER2=$(strip_unit ${DSMRDATA[meter2]} kWh)
-FEEDIN1=$(strip_unit ${DSMRDATA[feedin1]} kWh)
-FEEDIN2=$(strip_unit ${DSMRDATA[feedin2]} kWh)
+METER1=${DSMRDATA[meter1]}
+METER2=${DSMRDATA[meter2]}
+FEEDIN1=${DSMRDATA[feedin1]}
+FEEDIN2=${DSMRDATA[feedin2]}
 PRODTOTAL="${SMADATA[prod.etoday]}"
 
 ### opslaan/ophalen middernacht stand ###
@@ -308,6 +315,8 @@ else
 fi
 
 ### berekenen werkelijk gebruik ###
+PRODTODAY=${SMADATA[prod.etoday]}
+
 if [ -z $PRODTODAY ]
 then
 	clean_exit $X_UNKN "ERROR PRODTODAY undef"
