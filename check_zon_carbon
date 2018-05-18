@@ -116,6 +116,8 @@ dsmrfill () {
 		return 1
 	fi
 
+	declare -A TMP
+
 	for k in "${!DSMRMAP[@]}"
 	do
 		if [[ $k = [01]-[01]* ]]; then
@@ -123,19 +125,17 @@ dsmrfill () {
 			if [ -z $value ]; then
 				value=NaN
 			fi
-			if [ -z $old ]; then
-				DSMRDATA[$k]=$value
-				DSMRDATA[${DSMRMAP[$k]}]=$value
-			elif [ "$old" = old ]; then
-				DSMRDATAOLD[$k]=$value
-				DSMRDATAOLD[${DSMRMAP[$k]}]=$value
-			fi
+			TMP[$k]=$value
+			TMP[${DSMRMAP[$k]}]=$value
 		fi
 	done
-	if [ -z $old ]; then
-		DSMRDATA[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
-	elif [ "$old" = old ]; then
-		DSMRDATAOLD[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
+
+	TMP[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
+
+	if [ -z "$old" ]; then
+		SMADATA=(${TMP[@]})
+	else
+		SMADATAOLD=(${TMP[@]})
 	fi
 }
 
@@ -192,30 +192,25 @@ smafill () {
 		return 1
 	fi
 
+	declare -A TMP
+	TMP[device.status]=$($AWK '/Device Status/ {print $NF}' $fn)
+	TMP[device.temperature]=$($AWK '/Device Temperature/ {print $NF}' $fn | $SED 's/.C$//' )
+	TMP[prod.etoday]=$(strip_unit $($AWK '/EToday/ {print $NF}' $fn ) kWh )
+	TMP[prod.etotal]=$(strip_unit $($AWK '/ETotal/ {print $NF}' $fn ) kWh )
+	for spot in "String 1" "String 2"
+	do
+		safename=$(tr ' ' '_' <<<"$spot")
+		TMP[spot.$safename.pdc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $fn ) kW )
+		TMP[spot.$safename.udc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $fn ) V )
+		TMP[spot.$safename.idc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $fn ) A )
+	done
+
+	TMP[epoch]=$(stat --format "%Y" $fn)
+
 	if [ -z "$old" ]; then
-		SMADATA[device.status]=$($AWK '/Device Status/ {print $NF}' $fn)
-		SMADATA[device.temperature]=$($AWK '/Device Temperature/ {print $NF}' $fn | $SED 's/.C$//' )
-		SMADATA[prod.etoday]=$(strip_unit $($AWK '/EToday/ {print $NF}' $fn ) kWh )
-		SMADATA[prod.etotal]=$(strip_unit $($AWK '/ETotal/ {print $NF}' $fn ) kWh )
-		for spot in "String 1" "String 2"
-		do
-			safename=$(tr ' ' '_' <<<"$spot")
-			SMADATA[spot.$safename.pdc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $fn ) kW )
-			SMADATA[spot.$safename.udc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $fn ) V )
-			SMADATA[spot.$safename.idc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $fn ) A )
-		done
+		SMADATA=(${TMP[@]})
 	else
-		SMADATAOLD[device.status]=$($AWK '/Device Status/ {print $NF}' $fn)
-		SMADATAOLD[device.temperature]=$($AWK '/Device Temperature/ {print $NF}' $fn | $SED 's/.C$//' )
-		SMADATAOLD[prod.etoday]=$(strip_unit $($AWK '/EToday/ {print $NF}' $fn ) kWh )
-		SMADATAOLD[prod.etotal]=$(strip_unit $($AWK '/ETotal/ {print $NF}' $fn ) kWh )
-		for spot in "String 1" "String 2"
-		do
-			safename=$(tr ' ' '_' <<<"$spot")
-			SMADATAOLD[spot.$safename.pdc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "kW$" ) {print $i} } }' $fn ) kW )
-			SMADATAOLD[spot.$safename.udc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "V$" ) {print $i} } }' $fn ) V )
-			SMADATAOLD[spot.$safename.idc]=$(strip_unit $( $AWK "/$spot Pdc/"' {for (i=2; i<= NF; i++) { if ( $i ~ "A$" ) {print $i} } }' $fn ) A )
-		done
+		SMADATAOLD=(${TMP[@]})
 	fi
 }
 
