@@ -14,7 +14,7 @@ AWK=/usr/bin/awk
 SED=/bin/sed
 GREP=/bin/grep
 BC=/usr/bin/bc
-NC=/bin/nc
+NC="/bin/nc -w 10" #timeout after 10s
 
 X_OK=0
 X_WARN=1
@@ -286,18 +286,12 @@ log_and_send () {
     echo energie.$source.$name $value $EPOCH >> $LOGFILE
 }
 
+#Get the data
 read_sma $sunnyboy 7776 60 $SMACACHE
 
 read_dsmr $rpi 7777 60 $DSMRCACHE
 
-if [ -n "${SMADATA[device.status]}" ] && [ "${SMADATA[device.status]}" = "Ok" ]
-then
-	EXITSTATUS=$X_OK
-else
-	MESSAGE="Device status is $DEVSTATUS"
-	EXITSTATUS=$X_CRIT
-fi
-
+#send/log the data
 for k in "${!SMADATA[@]}"
 do
 	log_and_send sma $k "${SMADATA[$k]}"
@@ -308,36 +302,36 @@ do
 	log_and_send iskra $k "${DSMRDATA[$k]}"
 done
 
-PERFDATA="${PERFDATA}devtemp=${SMADATA[device.temperature]} "
+#prepare icinga outputs
 
-#gridfreq blijft hier even staan, maar eigenlijk niet monitoren...
-
-GRIDFREQ=$($AWK '/Grid Freq/ {print $NF}' $sbfdata | $SED 's/Hz$//' )
-
-if [ -z ${SMADATA[prod.etoday]} ]; then
-	MESSAGE="$MESSAGE prod.etoday undefined"
-	clean_exit $X_UNKN "$MESSAGE$PERFDATA"
+if [ -n "${SMADATA[device.status]}" ] && [ "${SMADATA[device.status]}" = "Ok" ]
+then
+	EXITSTATUS=$X_OK
+else
+	MESSAGE="Device status is $DEVSTATUS"
+	EXITSTATUS=$X_CRIT
 fi
 
+PERFDATA="${PERFDATA}devtemp=${SMADATA[device.temperature]} "
 PERFDATA="${PERFDATA}etoday=${SMADATA[prod.etoday]} "
-PERFDATA="${PERFDATA}gridfreq=$GRIDFREQ "
 
-if echo $GRIDFREQ |$GREP -q '^0\.00'
+if echo ${SMADATA[device.temperature]} |$GREP -q '^0\.0'
 then
 	MESSAGE="$MESSAGE OFFLINE"
 fi
 
 MESSAGE="$MESSAGE EToday=${SMADATA[prod.etoday]}kWh"
 
-### proces iskra data ###
+### process iskra data ###
 
 METER1=${DSMRDATA[meter1]}
 METER2=${DSMRDATA[meter2]}
 FEEDIN1=${DSMRDATA[feedin1]}
 FEEDIN2=${DSMRDATA[feedin2]}
 PRODTOTAL="${SMADATA[prod.etoday]}"
+PRODTODAY=${SMADATA[prod.etoday]}
 
-### opslaan/ophalen middernacht stand ###
+### store/retrieve midnight data ###
 
 NULSTANDFILE="/var/tmp/energie_nulstand.$USER"
 
@@ -361,11 +355,15 @@ write_nulstand () {
 	echo "l2=$l2" >>$NULSTANDFILE
 }
 
-if (( $HHMM < 0060 )) || (( $EPOCH > ($NSFMOD+$DAGSEC) ))
+if (( $EPOCH > ($NSFMOD+$DAGSEC) ))
 then
-	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
-	clean_exit $X_OK "${MESSAGE}${PERFDATA}"
-elif [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
+	if [[ $(date "+%H%M") = 000* ]]; then
+		write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
+		clean_exit $X_OK "${MESSAGE}${PERFDATA}"
+	fi
+fi
+
+if [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
 	source $NULSTANDFILE
 	# check values
 	if [ -z $etotal ] || [ -z $m1 ]
@@ -375,12 +373,12 @@ elif [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
 	fi
 
 else
+	#better something than nothing...
 	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
 	clean_exit $X_UNKN "NULSTANDFILE broken ${MESSAGE}${PERFDATA}"
 fi
 
-### berekenen werkelijk gebruik ###
-PRODTODAY=${SMADATA[prod.etoday]}
+### calculate actual use ###
 
 if [ -z $PRODTODAY ]
 then
@@ -429,6 +427,10 @@ gebruik=$( $BC <<<"scale=3; ( ($METER1+$METER2) - ($m1+$m2) ) + $eigprodgebr" )
 PERFDATA="${PERFDATA}gebruik=$gebruik eigprodgebr=$eigprodgebr "
 
 ### output ###
+
+echo DEBUG SMADATA ${SMADATA[@]}
+
+echo DEBUG DSMRDATA ${DSMRDATA[@]}
 
 clean_exit $EXITSTATUS "${MESSAGE}${PERFDATA}"
 
