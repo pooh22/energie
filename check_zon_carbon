@@ -14,7 +14,7 @@ AWK=/usr/bin/awk
 SED=/bin/sed
 GREP=/bin/grep
 BC=/usr/bin/bc
-NC="/bin/nc -w 10" #timeout after 10s
+NC="/bin/nc -w 20" #timeout
 
 X_OK=0
 X_WARN=1
@@ -133,7 +133,7 @@ dsmrfill () {
 	TMP[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
 
 	if [ -z "$old" ]; then
-		for k in "${TMP[@]}"
+		for k in "${!TMP[@]}"
 		do
 			DSMRDATA[$k]=${TMP[$k]}
 		done
@@ -214,12 +214,12 @@ smafill () {
 	TMP[epoch]=$(stat --format "%Y" $fn)
 
 	if [ -z "$old" ]; then
-		for k in "${TMP[@]}"
+		for k in "${!TMP[@]}"
 		do
 			SMADATA[$k]=${TMP[$k]}
 		done
 	else
-		for k in "${TMP[@]}"
+		for k in "${!TMP[@]}"
 		do
 			SMADATAOLD[$k]=${TMP[$k]}
 		done
@@ -231,7 +231,6 @@ read_sma () {
 	local port="$2"
 	local cachetime="$3"
 	local cachefile="$4"
-
 
 	if [ -f $cachefile ]; then
 		cache_date=$(stat --format "%Y" $cachefile)
@@ -297,6 +296,8 @@ log_and_send () {
     #    $NC -c $carbon $carbonport
     echo energie.$source.$name $value $EPOCH >> $LOGFILE
 }
+
+################################## main ##############################
 
 #Get the data
 read_sma $sunnyboy 7776 60 $SMACACHE
@@ -439,10 +440,6 @@ gebruik=$( $BC <<<"scale=3; ( ($METER1+$METER2) - ($m1+$m2) ) + $eigprodgebr" )
 PERFDATA="${PERFDATA}gebruik=$gebruik eigprodgebr=$eigprodgebr "
 
 ### output ###
-
-echo DEBUG SMADATA ${SMADATA[@]}
-
-echo DEBUG DSMRDATA ${DSMRDATA[@]}
 
 clean_exit $EXITSTATUS "${MESSAGE}${PERFDATA}"
 
