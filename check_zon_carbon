@@ -130,7 +130,7 @@ dsmrfill () {
 		fi
 	done
 
-	TMP[epoch]=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
+	TMP[epoch]=$(timestamp_to_epoch ${TMP[timestamp]})
 
 	if [ -z "$old" ]; then
 		for k in "${!TMP[@]}"
@@ -170,6 +170,7 @@ read_dsmr () {
 			cp $iskradata $cachefile
 		else
 			MESSAGE="$MESSAGE ISKRA data incomplete"
+#debug			cat $iskradata
 			clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 		fi
 	fi
@@ -315,25 +316,68 @@ do
 	log_and_send iskra $k "${DSMRDATA[$k]}"
 done
 
+#prepare icinga outputs
+
+PERFDATA="${PERFDATA}devtemp=${SMADATA[device.temperature]} "
+PERFDATA="${PERFDATA}etoday=${SMADATA[prod.etoday]} "
+
 # testing....
 
-echo "========"
+#echo "========"
 # delta waarden
-echo etoday.1 etoday tijd.1 tijd
-echo ${SMADATAOLD[etoday]} ${SMADATA[etoday]} ${SMADATAOLD[epoch]} ${SMADATA[epoch]}
-echo "========"
-#prepare icinga outputs
+#echo etoday.1 etoday tijd.1 tijd
+#echo ${SMADATAOLD[prod.etoday]} ${SMADATA[prod.etoday]} ${SMADATAOLD[epoch]} ${SMADATA[epoch]}
+delta_sma_period=$(( ${SMADATA[epoch]} - ${SMADATAOLD[epoch]} ))
+delta_sma_productionrate=$( echo " scale=3; 3600000 * ( ${SMADATA[prod.etoday]} - ${SMADATAOLD[prod.etoday]} ) / $delta_sma_period" | bc )
+
+PERFDATA="${PERFDATA}sma_period=${delta_sma_period}s "
+PERFDATA="${PERFDATA}prodnowP=$delta_sma_productionrate "
+
+#echo $delta_sma_production "W"
+#echo "========"
+for spot in String_1 String_2
+do
+	#echo "$spot Pdc = ${SMADATA[spot.$spot.pdc]} kW"
+	PERFDATA="${PERFDATA}${spot}P=${SMADATA[spot.$spot.pdc]} "
+done
+#echo "========"
+#echo "gebruik laatste periode (m1+m2) - (m1'+m2')"
+delta_dsmr_period=$(( ${DSMRDATA[epoch]} - ${DSMRDATAOLD[epoch]} ))
+
+PERFDATA="${PERFDATA}dsmr_period=${delta_dsmr_period}s "
+
+delta_gebruik=$( echo " (${DSMRDATA[meter1]} + ${DSMRDATA[meter2]} ) - (${DSMRDATAOLD[meter1]} + ${DSMRDATAOLD[meter2]} )" | bc )
+periode_gebruikrate=$( echo "scale=1; 3600000 * $delta_gebruik / $delta_dsmr_period" | bc )
+
+PERFDATA="${PERFDATA}dsmr_userate=$periode_gebruikrate "
+
+#echo $delta_gebruik kWh per $delta_dsmr_period s
+#echo gemiddeld $periode_gebruikrate W in de afgelopen $delta_dsmr_period s
+#echo "========"
+#echo "geleverd laatste periode (l1+l2) - (l1'+l2')" 
+delta_geleverd=$( echo " (${DSMRDATA[feedin1]} + ${DSMRDATA[feedin2]} ) - (${DSMRDATAOLD[feedin1]} + ${DSMRDATAOLD[feedin2]} )" | bc )
+periode_geleverdrate=$( echo "scale=1;3600000 * $delta_geleverd / $delta_dsmr_period" | bc )
+
+PERFDATA="${PERFDATA}dsmr_perioduserate=$periode_geleverdrate "
+
+#echo $delta_geleverd kWh per $delta_dsmr_period s
+#echo gemiddeld $periode_geleverdrate W in de afgelopen $delta_dsmr_period s
+#echo "========"
+#echo echt gebruik... productie LP +  gebruik LP - geleverd LP
+real_use_in_period=$( echo "scale=3; $delta_sma_productionrate + $periode_gebruikrate - $periode_geleverdrate" | bc)
+
+PERFDATA="${PERFDATA}corrected_userate=$real_use_in_period "
+
+#echo $real_use_in_period W
+#echo "========"
 
 if [ -n "${SMADATA[device.status]}" ] && [ "${SMADATA[device.status]}" = "Ok" ]
 then
 	EXITSTATUS=$X_OK
 else
-	MESSAGE="Device status is $DEVSTATUS"
+	MESSAGE="$MESSAGE Device status is $DEVSTATUS"
 	EXITSTATUS=$X_CRIT
 fi
-
-PERFDATA="${PERFDATA}devtemp=${SMADATA[device.temperature]} "
-PERFDATA="${PERFDATA}etoday=${SMADATA[prod.etoday]} "
 
 if echo ${SMADATA[device.temperature]} |$GREP -q '^0\.0'
 then
@@ -341,110 +385,6 @@ then
 fi
 
 MESSAGE="$MESSAGE EToday=${SMADATA[prod.etoday]}kWh"
-
-### process iskra data ###
-
-METER1=${DSMRDATA[meter1]}
-METER2=${DSMRDATA[meter2]}
-FEEDIN1=${DSMRDATA[feedin1]}
-FEEDIN2=${DSMRDATA[feedin2]}
-PRODTOTAL="${SMADATA[prod.etoday]}"
-PRODTODAY=${SMADATA[prod.etoday]}
-
-### store/retrieve midnight data ###
-
-NULSTANDFILE="/var/tmp/energie_nulstand.$USER"
-
-if [ -f $NULSTANDFILE ]; then
-	NSFMOD=$(stat -c %Y "$NULSTANDFILE")
-else
-	NSFMOD=0
-fi
-
-write_nulstand () {
-	etotal=$1
-	m1=$2
-	m2=$3
-	l1=$4
-	l2=$5
-
-	echo "etotal=$etotal" >$NULSTANDFILE
-	echo "m1=$m1" >>$NULSTANDFILE
-	echo "m2=$m2" >>$NULSTANDFILE
-	echo "l1=$l1" >>$NULSTANDFILE
-	echo "l2=$l2" >>$NULSTANDFILE
-}
-
-if (( $EPOCH > ($NSFMOD+$DAGSEC) ))
-then
-	if [[ $(date "+%H%M") = 000* ]]; then
-		write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
-		clean_exit $X_OK "${MESSAGE}${PERFDATA}"
-	fi
-fi
-
-if [ $( cat $NULSTANDFILE |wc -l ) -eq 5 ]; then
-	source $NULSTANDFILE
-	# check values
-	if [ -z $etotal ] || [ -z $m1 ]
-	then
-		write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
-		clean_exit $X_UNKN "${MESSAGE}${PERFDATA}"
-	fi
-
-else
-	#better something than nothing...
-	write_nulstand $PRODTOTAL $METER1 $METER2 $FEEDIN1 $FEEDIN2
-	clean_exit $X_UNKN "NULSTANDFILE broken ${MESSAGE}${PERFDATA}"
-fi
-
-### calculate actual use ###
-
-if [ -z $PRODTODAY ]
-then
-	clean_exit $X_UNKN "ERROR PRODTODAY undef"
-fi
-if [ -z $FEEDIN1 ]
-then
-	clean_exit $X_UNKN "ERROR FEEDIN1 undef"
-fi
-if [ -z $FEEDIN2 ]
-then
-	clean_exit $X_UNKN "ERROR FEEDIN2 undef"
-fi
-if [ -z $l1 ]
-then
-	clean_exit $X_UNKN "ERROR l1 undef"
-fi
-if [ -z $l2 ]
-then
-	clean_exit $X_UNKN "ERROR l2 undef"
-fi
-if [ -z $METER1 ]
-then
-	clean_exit $X_UNKN "ERROR METER1 undef"
-fi
-if [ -z $METER2 ]
-then
-	clean_exit $X_UNKN "ERROR METER2 undef"
-fi
-if [ -z $m1 ]
-then
-	clean_exit $X_UNKN "ERROR m1 undef"
-fi
-if [ -z $m2 ]
-then
-	clean_exit $X_UNKN "ERROR m2 undef"
-fi
-
-eigprodgebr=$( $BC <<<"scale=3; $PRODTODAY - ( ($FEEDIN1+$FEEDIN2) - ($l1+$l2) )" )
-if [ -z $eigprodgebr ]
-then
-	clean_exit $X_UNKN "ERROR eigprodgebr undef"
-fi
-gebruik=$( $BC <<<"scale=3; ( ($METER1+$METER2) - ($m1+$m2) ) + $eigprodgebr" )
-
-PERFDATA="${PERFDATA}gebruik=$gebruik eigprodgebr=$eigprodgebr "
 
 ### output ###
 
