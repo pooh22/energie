@@ -315,6 +315,13 @@ do
 	log_and_send iskra $k "${DSMRDATA[$k]}"
 done
 
+# testing....
+
+echo "========"
+# delta waarden
+echo etoday.1 etoday tijd.1 tijd
+echo ${SMADATAOLD[etoday]} ${SMADATA[etoday]} ${SMADATAOLD[epoch]} ${SMADATA[epoch]}
+echo "========"
 #prepare icinga outputs
 
 if [ -n "${SMADATA[device.status]}" ] && [ "${SMADATA[device.status]}" = "Ok" ]
