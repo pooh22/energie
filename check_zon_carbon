@@ -33,6 +33,8 @@ carbonport=2003
 #short term cache file:
 DSMRCACHE=/tmp/cache.$PROG.iskra
 SMACACHE=/tmp/cache.$PROG.sma
+#DSMRCACHE=/tmp/testcache.$PROG.iskra
+#SMACACHE=/tmp/testcache.$PROG.sma
 
 #keep track of origin of data used:
 SMADATA_FROM_CACHE=0
@@ -42,9 +44,7 @@ DSMRDATA_FROM_CACHE=0
 LOGISKRA=/var/log/energie/$(date "+%Y")/$(date "+%m")/iskra-$(date "+%Y%m%d").log
 LOGSMA=/var/log/energie/$(date "+%Y")/$(date "+%m")/sma-$(date "+%Y%m%d").log
 
-HHMM=$(date "+%H%M")
 EPOCH=$(date "+%s")
-DAGSEC=86400 #seconds
 
 #global array for DSMR data
 declare -A DSMRDATA
@@ -118,6 +118,7 @@ dsmrfill () {
 
 	if ! grep  --binary-files=text -q '^\![A-F0-9]' $fn
 	then
+		echo "incomplete input dsmrfill"
 		return 1
 	fi
 
@@ -127,7 +128,7 @@ dsmrfill () {
 	do
 		if [[ $k = [01]-[01]* ]]; then
 			local value=$(grep  --binary-files=text "$k" $fn |tr '()' ' ' |awk '{print $2}' |sed -e 's/^00*//' -e 's/\*.*//')
-			if [ -z $value ]; then
+			if [ -z "$value" ]; then
 				value=NaN
 			fi
 			TMP[$k]=$value
@@ -175,7 +176,6 @@ read_dsmr () {
 			cp $iskradata $cachefile
 		else
 			MESSAGE="$MESSAGE ISKRA data incomplete"
-#debug			cat $iskradata
 			clean_exit $X_UNKN "$MESSAGE$PERFDATA"
 		fi
 	fi
@@ -301,12 +301,20 @@ log_and_send () {
 	fi
     fi
     if ! [ -d $(dirname $LOGFILE) ]; then
-        mkdir -p $(dirname $LOGFILE)
+        if ! mkdir -p $(dirname $LOGFILE)
+	then
+		return 1
+	fi
     fi
 
     #echo energie.$source.$name $value $EPOCH | /usr/bin/tee -a $LOGFILE |
     #    $NC -c $carbon $carbonport
-    echo energie.$source.$name $value $EPOCH >> $LOGFILE
+    if [ -w "$LOGFILE " ]
+    then
+        echo energie.$source.$name $value $EPOCH >> $LOGFILE
+    else
+	return 1
+    fi
 }
 
 ################################## main ##############################
@@ -339,12 +347,12 @@ PERFDATA="${PERFDATA}etoday=${SMADATA[prod.etoday]} "
 #echo etoday.1 etoday tijd.1 tijd
 #echo ${SMADATAOLD[prod.etoday]} ${SMADATA[prod.etoday]} ${SMADATAOLD[epoch]} ${SMADATA[epoch]}
 delta_sma_period=$(( ${SMADATA[epoch]} - ${SMADATAOLD[epoch]} ))
-delta_sma_production=$(echo "scale=4; ${SMADATA[prod.etoday]} - ${SMADATAOLD[prod.etoday]}" | bc )
+delta_sma_production=$(echo "scale=4; ${SMADATA[prod.etoday]} - ${SMADATAOLD[prod.etoday]}" | bc ) #kWh
 valid_sma_production=$( awk -vdp=$delta_sma_production ' BEGIN { if ( dp >= 0  && dp < 40 ) { print "true" } else { print "false" } }' ) 
 
 if [ $valid_sma_production = true ]
 then
-	delta_sma_productionrate=$( echo " scale=3; 3600000 * $delta_sma_production / $delta_sma_period" | bc )
+	delta_sma_productionrate=$( echo " 3600000 * $delta_sma_production / $delta_sma_period" | bc ) # W
 else
 	clean_exit  $X_UNKN "$MESSAGE$PERFDATA"
 fi
@@ -352,42 +360,44 @@ fi
 PERFDATA="${PERFDATA}sma_period=${delta_sma_period}s "
 PERFDATA="${PERFDATA}prodnowP=$delta_sma_productionrate "
 
-#echo $delta_sma_production "W"
+#echo delta sma prod = $delta_sma_productionrate "W"
 #echo "========"
 for spot in String_1 String_2
 do
-	#echo "$spot Pdc = ${SMADATA[spot.$spot.pdc]} kW"
-	PERFDATA="${PERFDATA}${spot}P=${SMADATA[spot.$spot.pdc]} "
+	spotpdc=$( echo "scale=0 ; 1000 *  ${SMADATA[spot.$spot.pdc]} " | bc )
+#	echo "spot $spot Pdc = $spotpdc W"
+	PERFDATA="${PERFDATA}${spot}P=$spotpdc "
 done
 #echo "========"
 #echo "gebruik laatste periode (m1+m2) - (m1'+m2')"
 delta_dsmr_period=$(( ${DSMRDATA[epoch]} - ${DSMRDATAOLD[epoch]} ))
 
+#echo delta dsmr period = $delta_dsmr_period
+
 PERFDATA="${PERFDATA}dsmr_period=${delta_dsmr_period}s "
 
-delta_gebruik=$( echo " (${DSMRDATA[meter1]} + ${DSMRDATA[meter2]} ) - (${DSMRDATAOLD[meter1]} + ${DSMRDATAOLD[meter2]} )" | bc )
-periode_gebruikrate=$( echo "scale=1; 3600000 * $delta_gebruik / $delta_dsmr_period" | bc )
-
+delta_gebruik=$( echo " (${DSMRDATA[meter1]} + ${DSMRDATA[meter2]} ) - (${DSMRDATAOLD[meter1]} + ${DSMRDATAOLD[meter2]} )" | bc ) #kWh
+periode_gebruikrate=$( echo "scale=1; 3600000 * $delta_gebruik / $delta_dsmr_period" | bc )  # W
 PERFDATA="${PERFDATA}dsmr_userate=$periode_gebruikrate "
 
 #echo $delta_gebruik kWh per $delta_dsmr_period s
 #echo gemiddeld $periode_gebruikrate W in de afgelopen $delta_dsmr_period s
 #echo "========"
 #echo "geleverd laatste periode (l1+l2) - (l1'+l2')" 
-delta_geleverd=$( echo " (${DSMRDATA[feedin1]} + ${DSMRDATA[feedin2]} ) - (${DSMRDATAOLD[feedin1]} + ${DSMRDATAOLD[feedin2]} )" | bc )
-periode_geleverdrate=$( echo "scale=1;3600000 * $delta_geleverd / $delta_dsmr_period" | bc )
+delta_geleverd=$( echo " (${DSMRDATA[feedin1]} + ${DSMRDATA[feedin2]} ) - (${DSMRDATAOLD[feedin1]} + ${DSMRDATAOLD[feedin2]} )" | bc ) #kWh
+periode_geleverdrate=$( echo "scale=1; 3600000 * $delta_geleverd / $delta_dsmr_period" | bc )  # W
 
-PERFDATA="${PERFDATA}dsmr_perioduserate=$periode_geleverdrate "
+PERFDATA="${PERFDATA}dsmr_periodprodrate=$periode_geleverdrate "
 
 #echo $delta_geleverd kWh per $delta_dsmr_period s
 #echo gemiddeld $periode_geleverdrate W in de afgelopen $delta_dsmr_period s
 #echo "========"
 #echo echt gebruik... productie LP +  gebruik LP - geleverd LP
 real_use_in_period=$( echo "scale=3; $delta_sma_productionrate + $periode_gebruikrate - $periode_geleverdrate" | bc)
+#echo $real_use_in_period W
 
 PERFDATA="${PERFDATA}corrected_userate=$real_use_in_period "
 
-#echo $real_use_in_period W
 #echo "========"
 
 if [ -n "${SMADATA[device.status]}" ] && [ "${SMADATA[device.status]}" = "Ok" ]
