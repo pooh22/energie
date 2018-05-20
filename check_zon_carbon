@@ -105,6 +105,11 @@ dsmrfill () {
 	local old="$2"
 	local fl=$(wc -l <$fn)
 
+        if ! [ -r $fn ]; then
+		echo "cannot read DSMRDATA $fn" 
+		clean_exit $X_UNKN "permission problem?"
+	fi
+
 	if [ -n "$old" ] && [ "$old" = old ]; then
 		: # ok
 	else
@@ -186,6 +191,12 @@ read_dsmr () {
 smafill () {
 	local fn="$1"
 	local old="$2"
+
+        if ! [ -r $fn ]; then
+		echo "cannot read SMADATA $fn" 
+		clean_exit $X_UNKN "permission problem?"
+	fi
+
 	local fl=$(wc -l <$fn)
 
 	if [ -n "$old" ] && [ "$old" = old ]; then
@@ -328,7 +339,15 @@ PERFDATA="${PERFDATA}etoday=${SMADATA[prod.etoday]} "
 #echo etoday.1 etoday tijd.1 tijd
 #echo ${SMADATAOLD[prod.etoday]} ${SMADATA[prod.etoday]} ${SMADATAOLD[epoch]} ${SMADATA[epoch]}
 delta_sma_period=$(( ${SMADATA[epoch]} - ${SMADATAOLD[epoch]} ))
-delta_sma_productionrate=$( echo " scale=3; 3600000 * ( ${SMADATA[prod.etoday]} - ${SMADATAOLD[prod.etoday]} ) / $delta_sma_period" | bc )
+delta_sma_production=$(echo "scale=4; ${SMADATA[prod.etoday]} - ${SMADATAOLD[prod.etoday]}" | bc )
+valid_sma_production=$( awk -vdp=$delta_sma_production ' BEGIN { if ( dp >= 0  && dp < 40 ) { print "true" } else { print "false" } }' ) 
+
+if [ $valid_sma_production = true ]
+then
+	delta_sma_productionrate=$( echo " scale=3; 3600000 * $delta_sma_production / $delta_sma_period" | bc )
+else
+	clean_exit  $X_UNKN "$MESSAGE$PERFDATA"
+fi
 
 PERFDATA="${PERFDATA}sma_period=${delta_sma_period}s "
 PERFDATA="${PERFDATA}prodnowP=$delta_sma_productionrate "
