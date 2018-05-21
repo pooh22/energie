@@ -30,11 +30,15 @@ rpi=192.168.9.28
 carbon=192.168.9.60
 carbonport=2003
 
+DEBUG=0
+
 #short term cache file:
 DSMRCACHE=/tmp/cache.$PROG.iskra
 SMACACHE=/tmp/cache.$PROG.sma
-#DSMRCACHE=/tmp/testcache.$PROG.iskra
-#SMACACHE=/tmp/testcache.$PROG.sma
+if [ $DEBUG = 1 ]; then
+	DSMRCACHE=/tmp/testcache.$PROG.iskra
+	SMACACHE=/tmp/testcache.$PROG.sma
+fi
 
 #keep track of origin of data used:
 SMADATA_FROM_CACHE=0
@@ -377,7 +381,19 @@ delta_dsmr_period=$(( ${DSMRDATA[epoch]} - ${DSMRDATAOLD[epoch]} ))
 PERFDATA="${PERFDATA}dsmr_period=${delta_dsmr_period}s "
 
 delta_gebruik=$( echo " (${DSMRDATA[meter1]} + ${DSMRDATA[meter2]} ) - (${DSMRDATAOLD[meter1]} + ${DSMRDATAOLD[meter2]} )" | bc ) #kWh
+if [ $DEBUG = 1 ]; then
+	echo "delta_gebruik: $delta_gebruik = (${DSMRDATA[meter1]} + ${DSMRDATA[meter2]} ) - (${DSMRDATAOLD[meter1]} + ${DSMRDATAOLD[meter2]} ) kWh"
+fi
+
+if [ $( awk -vdg=$delta_gebruik 'BEGIN {if (dg > 10000 || dg < -10000) { print "toobig" } else { print "ok" } }') = toobig ]
+then
+	clean_exit $X_UNKN "delta_gebruik $$delta_gebruik too big"
+fi
+
 periode_gebruikrate=$( echo "scale=1; 3600000 * $delta_gebruik / $delta_dsmr_period" | bc )  # W
+if [ $DEBUG = 1 ]; then
+	echo "periode_gebruikrate: $periode_gebruikrate = 3600000 * $delta_gebruik / $delta_dsmr_period W"
+fi
 PERFDATA="${PERFDATA}dsmr_userate=$periode_gebruikrate "
 
 #echo $delta_gebruik kWh per $delta_dsmr_period s
