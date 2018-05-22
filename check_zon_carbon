@@ -163,8 +163,8 @@ read_dsmr () {
 
 
 	if [ -f $cachefile ]; then
-		dsmrfill $cachefile
 		DSMRDATA_FROM_CACHE=1
+		dsmrfill $cachefile
 		cache_date=$(timestamp_to_epoch ${DSMRDATA[timestamp]})
 		cache_age=$(( $EPOCH - $cache_date ))
 	else
@@ -176,6 +176,7 @@ read_dsmr () {
 
 		if dsmrfill $iskradata
 		then
+            DSMRDATA_FROM_CACHE=0
 			cp -a $cachefile $cachefile.1
 			cp $iskradata $cachefile
 		else
