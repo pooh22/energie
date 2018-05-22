@@ -65,7 +65,7 @@ def get_dsmr_data (lines):
 		modelcount = modelcount + 1
 
 	    #p1_str=str(p1_raw, "utf-8")
-	    p1_line=p1_str.strip('\0')
+	    p1_line=p1_str.strip('\0\r\n')
 	    if modelcount == 1:
 		lines.append(p1_line)
 
