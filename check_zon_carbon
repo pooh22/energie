@@ -340,6 +340,9 @@ do
 	log_and_send iskra $k "${DSMRDATA[$k]}"
 done
 
+if [ -z "${DSMRDATAOLD[epoch]}" ]; then
+        clean_exit $X_UNKN "no old data"
+fi
 #prepare icinga outputs
 
 PERFDATA="${PERFDATA}devtemp=${SMADATA[device.temperature]} "
