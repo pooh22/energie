@@ -21,7 +21,7 @@ DSMRMAP = {
     'feedin2':'1-0:2.8.2',
     'tariff':'0-0:96.14.0',
     'using':'1-0:1.7.0',
-    'feeding':'1-0:2.7.0',
+    'feedin':'1-0:2.7.0',
     'allpf':'0-0:96.7.21',
     'longpf':'0-0:96.7.9',
     '0-0:1.0.0':'timestamp',
@@ -31,7 +31,7 @@ DSMRMAP = {
     '1-0:2.8.2':'feedin2',
     '0-0:96.14.0':'tariff',
     '1-0:1.7.0':'using',
-    '1-0:2.7.0':'feeding',
+    '1-0:2.7.0':'feedin',
     '0-0:96.7.21':'allpf',
     '0-0:96.7.9':'longpf',
 }
@@ -58,11 +58,58 @@ def netcat(host, port):
 def sma_fill(lines):
     "return dictionary with data from lines"
     d = {}
+    d['sma.spots'] = ""
     unitof = {}
     for line in lines:
         linefmt = re.search( r'(Device.Status|Device.Temperature|EToday|ETotal|Pdc):', line, re.I )
         if linefmt:
-            print line 
+            if "Device Status" in line:
+                matchobj = re.match ( r'Device.Status: (.*)$', line)
+                if matchobj:
+                    d['sma.device.status'] = matchobj.group(1)
+                else:
+                    print "problem matching device status line"
+            elif "Device Temperature" in line:
+                #matchobj = re.match ( r'Device.Temperature: (\d\.\d+)(..)$', line)
+                matchobj = re.match ( r'Device.Temperature: (.*)(...)', line)
+                if matchobj:
+                    d['sma.device.temperature'] = matchobj.group(1)
+                    unitof['sma.device.temperature'] = "C"
+                else:
+                    print "problem matching device temperature line"
+            elif "EToday" in line:
+                matchobj = re.match ( r'.*EToday: (\d+\.\d+)', line)
+                if matchobj:
+                    d['sma.prod.etoday'] = matchobj.group(1)
+                    unitof['sma.prod.etoday'] = "kWh"
+                else:
+                    print "problem matching prod etoday line"
+            elif "ETotal" in line:
+                matchobj = re.match ( r'.*ETotal: (\d+\.\d+)', line)
+                if matchobj:
+                    d['sma.prod.etotal'] = matchobj.group(1)
+                    unitof['sma.prod.etotal'] = "kWh"
+                else:
+                    print "problem matching prod etotal line"
+            elif "Pdc" in line:
+                matchobj = re.match ( r'\s+(.*?) Pdc: +(\d+\.\d+)kW.*?Udc: +(\d+\.\d+)V.*?Idc: +(\d+\.\d+)A', line)
+                if matchobj:
+                    safename = matchobj.group(1)
+                    safename = re.sub(r'\s', '_', safename)
+                    safename = 'sma.spot.' + safename
+                    d['sma.spots'] = d['sma.spots'] + " " + safename
+                    d[safename + '.pdc'] = matchobj.group(2)
+                    unitof[safename + '.pdc'] = "kW"
+                    d[safename + '.udc'] = matchobj.group(3)
+                    unitof[safename + '.udc'] = "V"
+                    d[safename + '.idc'] = matchobj.group(4)
+                    unitof[safename + '.idc'] = "A"
+                else:
+                    print "problem matching prod etotal line"
+           
+    for k in unitof:
+        kunit = k + "-unit"
+        d[kunit] = unitof[k]
     return d        
     
 
@@ -103,6 +150,8 @@ def dsmr_fill(lines):
 #        minute = ts.group(5)
 #        seconds = ts.group(6)
 #        print "timestamp = ", year, month, day, hour, minute, seconds
+# or....
+# use local system time for both
 
     return d
 
@@ -110,10 +159,22 @@ def dsmr_fill(lines):
 if __name__ == '__main__':
     sma_rawdata = netcat( sma_host, sma_port)
     sma_data = sma_fill( sma_rawdata)
-    for k in sma_data:
-        print "sma", k, sma_data[k]
+#    for k in sma_data:
+#        print "sma", k, sma_data[k]
 
-#    dsmr_rawdata = netcat( dsmr_host, dsmr_port)
-#    dsmr_data = dsmr_fill( dsmr_rawdata)
+    dsmr_rawdata = netcat( dsmr_host, dsmr_port)
+    dsmr_data = dsmr_fill( dsmr_rawdata)
 #    for k in dsmr_data:
-#        print k, " = ", dsmr_data[k]
+#        print "dsmr", k, " = ", dsmr_data[k]
+    if not 'using' in dsmr_data:
+        dsmr_data['using'] = 0
+
+    prod_tot = 0.0 # kW
+    for spot in sma_data['sma.spots'].split():
+        prod_tot = prod_tot + float(sma_data[ spot + '.pdc'])
+
+    message = "prod=" + '%.3f' % prod_tot + "kW use=" + '%.3f' % float(dsmr_data['using']) + 'kW feedin=' + '%.3f' % float(dsmr_data['feedin']) + 'kW' 
+    perfdata = "|prod=" + '%.3f' % prod_tot + " use=" + '%.3f' % float(dsmr_data['using']) + ' feedin=' + '%.3f' % float(dsmr_data['feedin']) 
+    perfdata = perfdata + ' realuse=' '%.3f' % (float(dsmr_data['using']) +( prod_tot -  float(dsmr_data['feedin'])) )
+
+    print message + perfdata
