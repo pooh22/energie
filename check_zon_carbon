@@ -64,7 +64,7 @@ declare -A DSMRMAP=( \
     [feedin2]=1-0:2.8.2\
     [tariff]=0-0:96.14.0\
     [using]=1-0:1.7.0\
-    [feeding]=1-0:2.7.0\
+    [feedin]=1-0:2.7.0\
     [allpf]=0-0:96.7.21\
     [longpf]=0-0:96.7.9\
     [0-0:1.0.0]=timestamp\
@@ -74,7 +74,7 @@ declare -A DSMRMAP=( \
     [1-0:2.8.2]=feedin2\
     [0-0:96.14.0]=tariff\
     [1-0:1.7.0]=using\
-    [1-0:2.7.0]=feeding\
+    [1-0:2.7.0]=feedin\
     [0-0:96.7.21]=allpf\
     [0-0:96.7.9]=longpf\
 )

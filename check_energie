@@ -5,6 +5,7 @@ import socket
 import re
 import pprint
 import string
+import sys
 
 pp = pprint.PrettyPrinter(indent=4)
 
@@ -170,11 +171,25 @@ if __name__ == '__main__':
         dsmr_data['using'] = 0
 
     prod_tot = 0.0 # kW
+    spotperf = ""
+
     for spot in sma_data['sma.spots'].split():
         prod_tot = prod_tot + float(sma_data[ spot + '.pdc'])
+        spotperf = spotperf + ' spot-' + spot + '-Power=' + '%.3f' % float(sma_data[ spot + '.pdc'])
 
     message = "prod=" + '%.3f' % prod_tot + "kW use=" + '%.3f' % float(dsmr_data['using']) + 'kW feedin=' + '%.3f' % float(dsmr_data['feedin']) + 'kW' 
-    perfdata = "|prod=" + '%.3f' % prod_tot + " use=" + '%.3f' % float(dsmr_data['using']) + ' feedin=' + '%.3f' % float(dsmr_data['feedin']) 
+    perfdata = "|prod=" + '%.3f' % prod_tot 
+    perfdata = perfdata + spotperf
+    perfdata = perfdata + " etoday=" + '%.3f' % float(sma_data['sma.prod.etoday']) 
+    perfdata = perfdata + " griduse=" + '%.3f' % float(dsmr_data['using']) 
+    perfdata = perfdata + ' feedin=' + '%.3f' % float(dsmr_data['feedin']) 
     perfdata = perfdata + ' realuse=' '%.3f' % (float(dsmr_data['using']) +( prod_tot -  float(dsmr_data['feedin'])) )
 
+    message = "SMA is " + sma_data['sma.device.status'].strip()  + ' ' + message
+
     print message + perfdata
+
+    if "Ok" in sma_data['sma.device.status']:
+        sys.exit(0)
+    else:
+        sys.exit(2)
