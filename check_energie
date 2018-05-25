@@ -1,6 +1,15 @@
 #!/usr/bin/python
 # vim: bg=dark tabstop=4 expandtab shiftwidth=4 softtabstop=4 smarttab smartindent
 
+#TODO:
+# - usage with -h flag
+# - store data in database, especially first counter value of each day
+# - option to store data in a (remote) graphite or influx type database
+# - options to control ip:port of units to read
+# - options to read locally connected devices instead of using net sockets
+# - output cumulative actual use per day
+# - output bottomline for each day (used or fed in result of the day)
+
 import socket
 import re
 import pprint
@@ -131,10 +140,12 @@ def dsmr_fill(lines):
             d[k] = v
 
     for k, v in d.items():
+        # add units to dictionary in case they are needed
         if k in unitof:
             tmpkey = k + "-unit"
             d[ tmpkey ] = unitof[k] # also set the human readable value
 
+        #also fill human readable keys with the appropriate value
         if k in DSMRMAP:
             d[ DSMRMAP[k] ] = d[k] # also set the human readable value
             if k in unitof:
@@ -158,15 +169,20 @@ def dsmr_fill(lines):
 
 	
 if __name__ == '__main__':
+    DEBUG = 0
+
     sma_rawdata = netcat( sma_host, sma_port)
     sma_data = sma_fill( sma_rawdata)
-#    for k in sma_data:
-#        print "sma", k, sma_data[k]
+    if DEBUG == 2:
+        for k in sma_data:
+            print "sma", k, sma_data[k]
 
     dsmr_rawdata = netcat( dsmr_host, dsmr_port)
     dsmr_data = dsmr_fill( dsmr_rawdata)
-#    for k in dsmr_data:
-#        print "dsmr", k, " = ", dsmr_data[k]
+    if DEBUG == 2:
+        for k in dsmr_data:
+            print "dsmr", k, " = ", dsmr_data[k]
+
     if not 'using' in dsmr_data:
         dsmr_data['using'] = 0
 
@@ -180,10 +196,11 @@ if __name__ == '__main__':
     message = "prod=" + '%.3f' % prod_tot + "kW use=" + '%.3f' % float(dsmr_data['using']) + 'kW feedin=' + '%.3f' % float(dsmr_data['feedin']) + 'kW' 
     perfdata = "|prod=" + '%.3f' % prod_tot 
     perfdata = perfdata + spotperf
-    perfdata = perfdata + " etoday=" + '%.3f' % float(sma_data['sma.prod.etoday']) 
+    perfdata = perfdata + ' realuse=' '%.3f' % (float(dsmr_data['using']) +( prod_tot -  float(dsmr_data['feedin'])) )
     perfdata = perfdata + " griduse=" + '%.3f' % float(dsmr_data['using']) 
     perfdata = perfdata + ' feedin=' + '%.3f' % float(dsmr_data['feedin']) 
-    perfdata = perfdata + ' realuse=' '%.3f' % (float(dsmr_data['using']) +( prod_tot -  float(dsmr_data['feedin'])) )
+    perfdata = perfdata + " etoday=" + '%.3f' % float(sma_data['sma.prod.etoday']) 
+    perfdata = perfdata + " devtemp=" + '%.1f' % float(sma_data['sma.device.temperature']) 
 
     message = "SMA is " + sma_data['sma.device.status'].strip()  + ' ' + message
 
