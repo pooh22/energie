@@ -15,13 +15,42 @@ import re
 import pprint
 import string
 import sys
+import optparse
 
 pp = pprint.PrettyPrinter(indent=4)
 
-sma_host = '192.168.9.57'
-sma_port = 7776
-dsmr_host = '192.168.9.28'
-dsmr_port = 7777
+parser = optparse.OptionParser()
+parser.add_option('-v', '--verbose', dest="verbose", action="store_true", default=False)
+parser.add_option('--solarhost', dest="solarhost" )
+parser.add_option('--solarport', dest="solarport" )
+parser.add_option('--dsmrhost', dest="dsmrhost" )
+parser.add_option('--dsmrport', dest="dsmrport" )
+
+options, remainder = parser.parse_args()
+
+if options.verbose:
+    print " verbose "
+    sys.exit(0)
+
+if options.solarhost:
+    sma_host = options.solarhost
+else:
+    sma_host = '192.168.9.57'
+
+if options.solarhost:
+    sma_port = options.solarport
+else:
+    sma_port = 7776
+
+if options.dsmrhost:
+    dsmr_host = options.dsmrhost
+else:
+    dsmr_host = '192.168.9.28'
+
+if options.dsmrhost:
+    dsmr_port = options.dsmrport
+else:
+    dsmr_port = 7777
 
 DSMRMAP = { 
     'timestamp':'0-0:1.0.0',
