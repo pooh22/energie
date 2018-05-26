@@ -5,7 +5,6 @@
 # - usage with -h flag
 # - store data in database, especially first counter value of each day
 # - option to store data in a (remote) graphite or influx type database
-# - options to control ip:port of units to read
 # - options to read locally connected devices instead of using net sockets
 # - output cumulative actual use per day
 # - output bottomline for each day (used or fed in result of the day)
@@ -20,11 +19,10 @@ import optparse
 pp = pprint.PrettyPrinter(indent=4)
 
 parser = optparse.OptionParser()
-parser.add_option('-v', '--verbose', dest="verbose", action="store_true", default=False)
-parser.add_option('--solarhost', dest="solarhost" )
-parser.add_option('--solarport', dest="solarport" )
-parser.add_option('--dsmrhost', dest="dsmrhost" )
-parser.add_option('--dsmrport', dest="dsmrport" )
+parser.add_option('--smahost', dest="smahost", help="host address for sma info (SBFspot output)" )
+parser.add_option('--smaport', dest="smaport", help="tcp port to connect to on smahost" )
+parser.add_option('--dsmrhost', dest="dsmrhost", help="host address to get dsmr data (from p1 port)" )
+parser.add_option('--dsmrport', dest="dsmrport", help="tcp port to connect to on dsmrhost" )
 
 options, remainder = parser.parse_args()
 
@@ -32,13 +30,13 @@ if options.verbose:
     print " verbose "
     sys.exit(0)
 
-if options.solarhost:
-    sma_host = options.solarhost
+if options.smahost:
+    sma_host = options.smahost
 else:
     sma_host = '192.168.9.57'
 
-if options.solarhost:
-    sma_port = options.solarport
+if options.smahost:
+    sma_port = options.smaport
 else:
     sma_port = 7776
 
