@@ -1,0 +1,239 @@
+#!/bin/bash
+
+logfile=/var/log/energie.log-$(date "+%Y%m%d")
+if [ ! -e $logfile ]; then
+	touch $logfile
+fi
+
+NORMAALG=10000 #10kWh
+EXTREEMG=15000 #15kWh
+
+NORMAALL=20000 #20kWh
+EXTREEML=23000 #23kWh
+
+### commando om p1 poort uit te lezen:
+#=====================================
+leesp1=/usr/local/bin/p1uitlezen.py
+if ! [ -x $leesp1 ]; then
+	echo "$leesp1 niet executable"
+	exit 2
+fi
+
+DEBUG=0
+if [ $# -gt 0 ]; then
+	if [ "$1" = "debug" ]; then
+		DEBUG=1
+	fi
+fi
+
+#voorbeeld output uit leesp1
+#===========================
+#/KFM5KAIFA-METER
+#
+#1-3:0.2.8(42)
+#0-0:1.0.0(170414160231S)
+#0-0:96.1.1(4530303237303030303130363131383136)
+#1-0:1.8.1(000506.089*kWh) = meterstand1
+#1-0:1.8.2(000605.188*kWh) = meterstand2
+#1-0:2.8.1(000000.000*kWh) (=geleverd tarief1)
+#1-0:2.8.2(000000.000*kWh) (=geleverd tarief2)
+#0-0:96.14.0(0002)
+#1-0:1.7.0(00.528*kW) = gebruiknu
+#1-0:2.7.0(00.000*kW) (= levernu)
+#0-0:96.7.21(00001)
+#0-0:96.7.9(00001)
+#1-0:99.97.0(1)(0-0:96.7.19)(000101000001W)(2147483647*s)
+#1-0:32.32.0(00000)
+#1-0:32.36.0(00000)
+#0-0:96.13.1()
+#0-0:96.13.0()
+#1-0:31.7.0(002*A)
+
+#bash functies:
+#==============
+eerste_regel () {
+	file="$1"
+	head -n 1 "$file"
+}
+
+read_kwh_stand () {
+	local key="$1"
+	local name="$2"
+	local lines="$3"
+
+	local tmpx=$(grep "$key(.*)" <<<"$lines" )
+	if ! grep -qiE '[[:digit:]]{6}\.[[:digit:]]{3}' <<<"$tmpx"
+	then
+		echo "stand $name string doesn't match expected format 000000.000: \"$tmpx\""
+		exit 3
+	fi
+	local tmp2=$(sed 's/.*(0*\(.*\)\*[Kk][wW]h)/\1/' <<<"$tmpx")
+	echo $(bc <<<"scale=0; $tmp2 * 1000"| sed 's/\..*$//' | head -n 1)
+}
+
+read_kw_stand () {
+	local key="$1"
+	local name="$2"
+	local lines="$3"
+
+	local tmpx=$(grep "$key(.*)" <<<"$lines" )
+	if ! grep -qiE '[[:digit:]]{2}\.[[:digit:]]{3}' <<<"$tmpx"
+	then
+		echo "stand $name string doesn't match expected format 00.000: \"$tmpx\""
+		exit 1
+	fi
+	tmp2=$(sed 's/.*(0*\(.*\)\*[Kk][wW])/\1/' <<<"$tmpx")
+	echo $(bc <<<"scale=0; $tmp2 * 1000"| sed 's/\..*$//' | head -n 1)
+}
+
+#write logfile entry
+writelog () {
+	local logfile="$1"
+	local mst1="$2"
+	local mst2="$3"
+	local lst1="$4"
+	local lst2="$5"
+	local dgeb="$6"
+	local dlev="$7"
+
+	#epoch meterstand1/2 leverstand1/2 en dagteller /leverteller in Wh
+	local logline=$(printf "%s\t%d\t%d\t%d\t%d\t%d\t%d\n" $(date "+%s") $mst1 $mst2 $lst1 $lst2 $dgeb $dlev)
+	if [ -w $logfile ]; then
+		echo "$logline" >>$logfile
+	else
+		echo "WARNING $logfile not writable"
+		echo "$logline"
+	fi
+}
+#============================
+# einde functies
+#============================
+
+#lees p1 uit of stop
+#===================
+if ! lines=$($leesp1)
+then
+	echo "Gebruik niet goed uitgelezen"
+	exit 2
+elif [ $DEBUG = 1 ]; then
+	echo "$lines"
+fi
+
+# haal actuele waarden uit p1 data:
+#==================================
+if ! meterstand1=$(read_kwh_stand "1-0:1.8.1" meterstand1 "$lines")
+then
+	echo "problem reading meterstand1 $meterstand1"
+	exit 3
+fi
+if ! leverstand1=$(read_kwh_stand "1-0:2.8.1" leverstand1 "$lines")
+then
+	echo "problem reading meterstand1 $meterstand1"
+	exit 3
+fi
+if ! meterstand2=$(read_kwh_stand "1-0:1.8.2" meterstand2 "$lines")
+then
+	echo "problem reading meterstand1 $meterstand1"
+	exit 3
+fi
+if ! leverstand2=$(read_kwh_stand "1-0:2.8.2" leverstand2 "$lines")
+then
+	echo "problem reading meterstand1 $meterstand1"
+	exit 3
+fi
+
+
+#lees beginstand of schrijf nieuwe beginstand
+#============================================
+if [ -f $logfile ] && [ $(wc -l <$logfile) -gt 0 ]; then
+	read t0 meterstand1_start meterstand2_start leverstand1_start leverstand2_start g0 tl0 <<<$(eerste_regel $logfile)
+else
+	writelog "$logfile" $meterstand1 $meterstand2 $leverstand1 $leverstand2 0 0
+	exit 0
+fi
+
+if [ $meterstand1 -lt $meterstand1_start ]; then
+		echo "meterstand waarschijnlijk fout: meterstand1=$meterstand1"
+		exit 1
+fi
+
+if [ $meterstand2 -lt $meterstand2_start ]; then
+		echo "meterstand waarschijnlijk fout: meterstand2=$meterstand2"
+		exit 1
+fi
+
+if [ $leverstand1 -lt $leverstand1_start ]; then
+		echo "leverstand waarschijnlijk fout: leverstand1=$leverstand1"
+		exit 1
+fi
+
+if [ $leverstand2 -lt $leverstand2_start ]; then
+		echo "leverstand waarschijnlijk fout: leverstand2=$leverstand2"
+		exit 1
+fi
+
+
+#bereken dagwaarden uit start en actuele waarden
+#===============================================
+daggebruik1=$(( $meterstand1 - $meterstand1_start ))
+daggebruik2=$(( $meterstand2 - $meterstand2_start ))
+daglevering1=$(( $leverstand1 - $leverstand1_start ))
+daglevering2=$(( $leverstand2 - $leverstand2_start ))
+gebruikvandaag=$(( $daggebruik1 + $daggebruik2 ))
+dagleveringtotaal=$(( $daglevering1 + $daglevering2 ))
+nettogebruik=$(( $gebruikvandaag - $dagleveringtotaal ))
+
+if [ $gebruikvandaag -lt 0 ]; then
+	echo "geen negatief gebruik: $gebruikvandaag"
+	exit 3
+fi
+
+if [ $dagleveringtotaal -lt 0 ]; then
+	echo "geen negatieve levering: $dagleveringtotaal"
+	exit 3
+fi
+
+if [ $nettogebruik -gt 40000 ]; then
+	echo "belachelijk gebruik: $nettogebruik kWh"
+	exit 3
+elif [ $nettogebruik -lt -30000 ]; then
+	echo "belachelijk gebruik: $nettogebruik kWh"
+	exit 3
+fi
+
+
+# waanzinnige stand, klopt vast niet
+#===================================
+if [ $gebruikvandaag -gt 100000 ]; then
+	echo "verbruik vandaag > 100kWh"
+	exit 3
+fi
+	
+# lees actueel gebruikt/geleverd vermogen uit p1 data
+#====================================================
+gebruiknu=$(read_kw_stand '1-0:1.7.0' gebruiknu "$lines")
+levernu=$(read_kw_stand '1-0:2.7.0' levernu "$lines")
+
+# componeren icinga output
+#=========================
+msg="Gebruik nu = ${gebruiknu}W totaal vandaag: $(bc <<<"scale=1; $gebruikvandaag/1000")kWh"
+perf="|gebruik=$gebruiknu geleverd=$levernu gebruikvandaag=$gebruikvandaag;$NORMAAL;$EXTREEM daglevering=$dagleveringtotaal;$NORMAAL;$EXTREEM nettogebruik=$nettogebruik;$NORMAAL;$EXTREEM"
+
+#logfile entry
+#=============
+writelog "$logfile" $meterstand1 $meterstand2 $leverstand1 $leverstand2 $gebruikvandaag $dagleveringtotaal
+
+#icinga output+perfdata
+#======================
+echo "$msg$perf"
+
+#icinga exit code
+#================
+if [ $gebruikvandaag -gt $EXTREEM ]; then
+	exit 2 #crit
+elif [ $gebruikvandaag -gt $NORMAAL ]; then
+	exit 1 #warn
+fi
+exit 0
+
+
