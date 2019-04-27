@@ -96,6 +96,7 @@ writelog () {
 	local dgeb="$6"
 	local dlev="$7"
 
+#TODO: meterstanden checken t.o.v. die uit logfile van gisteren als die bestaat.
 	#epoch meterstand1/2 leverstand1/2 en dagteller /leverteller in Wh
 	local logline=$(printf "%s\t%d\t%d\t%d\t%d\t%d\t%d\n" $(date "+%s") $mst1 $mst2 $lst1 $lst2 $dgeb $dlev)
 	if [ -w $logfile ]; then
@@ -197,7 +198,7 @@ if [ $nettogebruik -gt 40000 ]; then
 	echo "belachelijk gebruik: $nettogebruik kWh"
 	exit 3
 elif [ $nettogebruik -lt -30000 ]; then
-	echo "belachelijk gebruik: $nettogebruik kWh"
+	echo "belachelijk gebruik: $nettogebruik kWh; gebruikvandaag=$gebruikvandaag - dagleveringtotaal=$dagleveringtotaal"
 	exit 3
 fi
 
@@ -217,7 +218,7 @@ levernu=$(read_kw_stand '1-0:2.7.0' levernu "$lines")
 # componeren icinga output
 #=========================
 msg="Gebruik nu = ${gebruiknu}W totaal vandaag: $(bc <<<"scale=1; $gebruikvandaag/1000")kWh"
-perf="|gebruik=$gebruiknu geleverd=$levernu gebruikvandaag=$gebruikvandaag;$NORMAAL;$EXTREEM daglevering=$dagleveringtotaal;$NORMAAL;$EXTREEM nettogebruik=$nettogebruik;$NORMAAL;$EXTREEM"
+perf="|gebruik=$gebruiknu geleverd=$levernu gebruikvandaag=$gebruikvandaag;$NORMAAL;$EXTREEMG daglevering=$dagleveringtotaal;$NORMAAL;$EXTREEML nettogebruik=$nettogebruik;$NORMAAL;$EXTREEMG"
 
 #logfile entry
 #=============
@@ -229,9 +230,9 @@ echo "$msg$perf"
 
 #icinga exit code
 #================
-if [ $gebruikvandaag -gt $EXTREEM ]; then
+if [ $gebruikvandaag -gt $EXTREEMG ]; then
 	exit 2 #crit
-elif [ $gebruikvandaag -gt $NORMAAL ]; then
+elif [ $gebruikvandaag -gt $NORMAALG ]; then
 	exit 1 #warn
 fi
 exit 0
