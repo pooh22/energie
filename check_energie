@@ -26,10 +26,6 @@ parser.add_option('--dsmrport', dest="dsmrport", help="tcp port to connect to on
 
 options, remainder = parser.parse_args()
 
-if options.verbose:
-    print " verbose "
-    sys.exit(0)
-
 if options.smahost:
     sma_host = options.smahost
 else:
@@ -223,7 +219,12 @@ if __name__ == '__main__':
     message = "prod=" + '%.3f' % prod_tot + "kW use=" + '%.3f' % float(dsmr_data['using']) + 'kW feedin=' + '%.3f' % float(dsmr_data['feedin']) + 'kW' 
     perfdata = "|prod=" + '%.3f' % prod_tot 
     perfdata = perfdata + spotperf
-    perfdata = perfdata + ' realuse=' '%.3f' % (float(dsmr_data['using']) +( prod_tot -  float(dsmr_data['feedin'])) )
+    realuse = float(dsmr_data['using']) +( prod_tot -  float(dsmr_data['feedin']))
+#realuse cannot be negative
+    if realuse < 0:
+        perfdata = perfdata + ' realuse=NaN'
+    else:
+        perfdata = perfdata + ' realuse=' '%.3f' % realuse
     perfdata = perfdata + " griduse=" + '%.3f' % float(dsmr_data['using']) 
     perfdata = perfdata + ' feedin=' + '%.3f' % float(dsmr_data['feedin']) 
     perfdata = perfdata + " etoday=" + '%.3f' % float(sma_data['sma.prod.etoday']) 
